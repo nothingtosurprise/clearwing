@@ -2,6 +2,10 @@
 
 By Eric Hartford, Lazarus AI
 
+Inspired by Anthropic's Glasswing.  
+
+The challenge:  Produce similar results as Glasswing - using models everyone has access to.
+
 **Autonomous vulnerability scanner and source-code hunter built on
 LangGraph.**
 
