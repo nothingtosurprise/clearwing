@@ -38,6 +38,7 @@ nav:
   - Home: index.md
   - Quickstart: quickstart.md
   - LLM providers: providers.md
+  - FFmpeg case study: FFmpeg.md
   - Architecture: architecture.md
   - CLI reference: cli.md
   - API reference: api.md
