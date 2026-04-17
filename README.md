@@ -1,5 +1,7 @@
 # Clearwing
 
+<img width="400" alt="image" src="https://github.com/user-attachments/assets/c0444f24-32d8-4d62-af66-f1b7d8a123ba" />
+
 By Eric Hartford, Lazarus AI
 
 Inspired by Anthropic's Glasswing.  
