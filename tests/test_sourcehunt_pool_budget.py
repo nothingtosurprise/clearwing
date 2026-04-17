@@ -112,6 +112,41 @@ class TestTierAssignmentOnInit:
 # --- Tier A spending --------------------------------------------------------
 
 
+class TestUnlimitedBudget:
+    def test_zero_budget_runs_all_tiers(self):
+        files = [
+            *[_ft(f"a{i}.c", 5, 5) for i in range(5)],
+            *[_ft(f"b{i}.c", 2, 2) for i in range(5)],
+            *[_ft(f"c{i}.c", 1, 1) for i in range(5)],
+        ]
+        pool = _make_pool(files, budget=0.0, per_call_cost=1.0, max_parallel=1)
+
+        findings = pool.run()
+
+        assert len(findings) == len(files)
+        spent = pool.spent_per_tier
+        assert spent["A"] == pytest.approx(5.0)
+        assert spent["B"] == pytest.approx(5.0)
+        assert spent["C"] == pytest.approx(5.0)
+        assert pool.total_spent == pytest.approx(15.0)
+
+    def test_default_budget_is_unlimited(self):
+        files = [_ft(f"a{i}.c", 5, 5) for i in range(12)]
+        config = HuntPoolConfig(
+            files=files,
+            repo_path="/tmp/repo",
+            sandbox_factory=None,
+            hunter_factory=_stub_hunter_factory(1.0),
+            max_parallel=1,
+        )
+        pool = HunterPool(config)
+
+        findings = pool.run()
+
+        assert len(findings) == len(files)
+        assert pool.total_spent == pytest.approx(12.0)
+
+
 class TestTierASpend:
     def test_tier_a_spends_within_allocation(self):
         # 10 Tier A files at $0.50 each = $5.00; budget allows $7 for A

@@ -137,7 +137,8 @@ class HunterSandbox:
             try:
                 client.images.build(path=build_dir, tag=tag, rm=True, forcerm=True)
             except Exception as e:
-                logger.warning("Sandbox image build failed", exc_info=True)
+                logger.warning("Sandbox image build failed: %s", e)
+                logger.debug("Sandbox image build failed", exc_info=True)
                 raise RuntimeError(f"Failed to build sandbox image: {e}") from e
 
         return tag

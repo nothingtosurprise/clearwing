@@ -5,6 +5,12 @@ import os
 import sys
 
 
+def _format_budget(budget: float) -> str:
+    if budget <= 0:
+        return "unlimited"
+    return f"${budget:.2f}"
+
+
 def add_parser(subparsers):
     parser = subparsers.add_parser(
         "sourcehunt",
@@ -24,9 +30,9 @@ def add_parser(subparsers):
     parser.add_argument(
         "--budget",
         type=float,
-        default=5.0,
+        default=0.0,
         metavar="USD",
-        help="Max dollars to spend (default: 5.0)",
+        help="Max dollars to spend (default: unlimited; 0 = unlimited)",
     )
     parser.add_argument(
         "--max-parallel", type=int, default=8, help="Max concurrent hunters (default: 8)"
@@ -341,7 +347,7 @@ def handle(cli, args):
         )
         cli.console.print(
             f"[bold blue]Webhook server: {args.webhook_host}:{args.webhook_port} "
-            f"(depth={args.depth}, budget=${args.budget})[/bold blue]"
+            f"(depth={args.depth}, budget={_format_budget(args.budget)})[/bold blue]"
         )
         if args.webhook_allowed_repo:
             cli.console.print(f"  allowed repos: {', '.join(args.webhook_allowed_repo)}")
@@ -424,11 +430,15 @@ def handle(cli, args):
     )
 
     cli.console.print(
-        f"[bold blue]Sourcehunt: {args.repo} depth={args.depth} budget=${args.budget:.2f}[/bold blue]"
+        f"[bold blue]Sourcehunt: {args.repo} depth={args.depth} "
+        f"budget={_format_budget(args.budget)}[/bold blue]"
     )
 
     try:
         result = runner.run()
+    except KeyboardInterrupt:
+        cli.console.print("\n[yellow]Sourcehunt cancelled by user[/yellow]")
+        sys.exit(130)
     except (ValueError, RuntimeError) as exc:
         cli.console.print(f"[red]Error: {exc}[/red]")
         sys.exit(1)

@@ -58,6 +58,10 @@ class ProviderPreset:
     #: setup wizard ("Common models: ..." hint).
     alt_models: tuple[str, ...] = field(default_factory=tuple)
 
+    #: Optional named auth flow. OAuth providers use this to skip API-key
+    #: prompts and write an auth marker into config.yaml.
+    auth_flow: str | None = None
+
 
 # --- The catalog ----------------------------------------------------------
 
@@ -129,6 +133,18 @@ PROVIDER_PRESETS: tuple[ProviderPreset, ...] = (
         alt_models=("gpt-4o-mini", "o1-preview", "o1-mini"),
     ),
     ProviderPreset(
+        key="openai-oauth",
+        display_name="OpenAI OAuth (ChatGPT)",
+        description="ChatGPT Plus/Pro browser OAuth, no Platform API key. Uses the Codex backend.",
+        docs_url="https://chatgpt.com/",
+        default_base_url="https://chatgpt.com/backend-api",
+        default_model="gpt-5.2",
+        api_key_env_var=None,
+        is_openai_compat=False,
+        alt_models=("gpt-5.4", "gpt-5.4-mini", "gpt-5.2"),
+        auth_flow="openai_codex",
+    ),
+    ProviderPreset(
         key="together",
         display_name="Together AI",
         description="Managed hosting for Llama / Qwen / DeepSeek / Mixtral.",
@@ -187,6 +203,12 @@ PROVIDER_PRESETS: tuple[ProviderPreset, ...] = (
 def preset_by_key(key: str) -> ProviderPreset | None:
     """Look up a provider preset by its short key. Case-insensitive."""
     key_lower = key.lower().strip()
+    aliases = {
+        "openai_oauth": "openai-oauth",
+        "openai-codex": "openai-oauth",
+        "openai_codex": "openai-oauth",
+    }
+    key_lower = aliases.get(key_lower, key_lower)
     for preset in PROVIDER_PRESETS:
         if preset.key == key_lower:
             return preset

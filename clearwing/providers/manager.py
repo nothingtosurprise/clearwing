@@ -500,6 +500,8 @@ def _expand_env(value: Any) -> str:
 def _adapter_for_endpoint(endpoint: LLMEndpoint) -> str:
     if endpoint.provider == "anthropic":
         return "anthropic"
+    if endpoint.provider == "openai_codex":
+        return "openai_codex"
     return _adapter_for_base_url(endpoint.base_url, endpoint.model)
 
 
@@ -507,6 +509,8 @@ def _adapter_for_provider_config(provider: str, config: ProviderConfig | None) -
     explicit = provider.lower().strip()
     if explicit == "anthropic":
         return "anthropic"
+    if explicit in {"openai_codex", "openai-codex", "openai_oauth", "openai-oauth"}:
+        return "openai_codex"
     if explicit == "google":
         return "gemini"
     if explicit == "ollama":

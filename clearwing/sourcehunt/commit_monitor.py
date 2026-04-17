@@ -43,7 +43,7 @@ class CommitMonitorConfig:
     max_iterations: int = 0  # 0 = infinite (until cancelled)
     output_dir: str = "./sourcehunt-results/watch"
     depth: str = "standard"
-    budget_usd: float = 5.0
+    budget_usd: float = 0.0
     on_finding: Callable | None = None
     runner_factory: Callable | None = None  # test injection point
     # v0.4 GitHub Checks integration

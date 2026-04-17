@@ -172,6 +172,31 @@ class TestConfigPrecedence:
         # Falls back to _placeholder_for() which returns "not-needed" for OpenRouter
         assert ep.api_key == "not-needed"
 
+    def test_config_openai_oauth_routes_to_codex(self, clean_env, monkeypatch):
+        import clearwing.providers.openai_oauth as openai_oauth
+
+        monkeypatch.setattr(
+            openai_oauth,
+            "ensure_fresh_openai_oauth_credentials",
+            lambda: openai_oauth.OpenAIOAuthCredentials(
+                access="access-token",
+                refresh="refresh-token",
+                expires_ms=123,
+                account_id="acct_123",
+            ),
+        )
+        ep = resolve_llm_endpoint(
+            config_provider={
+                "auth": "openai_codex",
+                "model": "gpt-5.2",
+            }
+        )
+        assert ep.provider == "openai_codex"
+        assert ep.base_url == "https://chatgpt.com/backend-api"
+        assert ep.model == "gpt-5.2"
+        assert ep.api_key == "access-token"
+        assert not ep.is_openai_compat
+
 
 # --- Default path ----------------------------------------------------------
 

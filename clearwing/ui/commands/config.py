@@ -19,7 +19,7 @@ def add_parser(subparsers):
         help=(
             "Configure the default LLM endpoint and persist to "
             "~/.clearwing/config.yaml. Accepts: base_url=..., "
-            "api_key=..., model=... "
+            "api_key=..., model=..., auth=... "
             "Example: clearwing config --set-provider "
             "base_url=https://openrouter.ai/api/v1 "
             "api_key='${OPENROUTER_API_KEY}' "
@@ -76,15 +76,15 @@ def _apply_set_provider(cli, pairs: list[str]) -> None:
         if "=" not in pair:
             cli.console.print(
                 f"[red]Error: '{pair}' is not a KEY=VALUE pair. "
-                "Expected base_url=... / api_key=... / model=...[/red]"
+                "Expected base_url=... / api_key=... / model=... / auth=...[/red]"
             )
             return
         key, value = pair.split("=", 1)
         key = key.strip().lower()
-        if key not in ("base_url", "api_key", "model"):
+        if key not in ("base_url", "api_key", "model", "auth"):
             cli.console.print(
                 f"[red]Error: unknown provider key '{key}'. "
-                "Expected one of: base_url, api_key, model.[/red]"
+                "Expected one of: base_url, api_key, model, auth.[/red]"
             )
             return
         updates[key] = value.strip()
@@ -126,10 +126,11 @@ def _show_provider(cli) -> None:
 
     # No CLI flags on `config` — show env + config.yaml state.
     endpoint = resolve_llm_endpoint(
-        config_provider=cli.config.get_provider_section() or None,
+        config_provider=cli.config.get_provider_section(),
     )
 
     lines = [
+        f"  provider: {endpoint.provider}",
         f"  model:    {endpoint.model}",
         f"  base_url: {endpoint.base_url or '(Anthropic direct)'}",
         f"  api_key:  {'(set)' if endpoint.api_key else '(NOT SET)'}",

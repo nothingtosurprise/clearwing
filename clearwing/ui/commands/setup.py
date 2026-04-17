@@ -50,8 +50,19 @@ def add_parser(subparsers):
         help=(
             "Skip the menu and configure this provider directly "
             "(e.g. openrouter, ollama, lmstudio, anthropic, openai, "
-            "together, groq, deepseek, fireworks, custom)"
+            "openai-oauth, together, groq, deepseek, fireworks, custom)"
         ),
+    )
+    parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="For OAuth providers, don't open the browser automatically",
+    )
+    parser.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=60,
+        help="For OAuth providers, local callback wait timeout",
     )
     parser.add_argument(
         "--no-test",
@@ -97,7 +108,12 @@ def handle(cli, args) -> None:
     base_url = _prompt_base_url(console, preset)
     if base_url == "":
         base_url = None  # Anthropic direct has no base_url
-    api_key_literal = _prompt_api_key(console, preset)
+    api_key_literal = _prompt_api_key(
+        console,
+        preset,
+        no_open=bool(getattr(args, "no_open", False)),
+        timeout_seconds=int(getattr(args, "timeout_seconds", 60)),
+    )
     model = _prompt_model(console, preset)
 
     if model == "" and preset.key != "anthropic":
@@ -185,6 +201,13 @@ def _prompt_provider_choice(
 
 def _prompt_base_url(console: Console, preset: ProviderPreset) -> str:
     """Prompt for base_url with a provider-appropriate default."""
+    if preset.auth_flow == "openai_codex":
+        console.print(
+            "[dim]OpenAI OAuth uses the ChatGPT Codex backend "
+            "(no Platform API key or /v1 base URL).[/dim]"
+        )
+        return preset.default_base_url or "https://chatgpt.com/backend-api"
+
     if preset.default_base_url is None:
         # Anthropic direct — no base_url to configure
         console.print("[dim]Anthropic direct uses api.anthropic.com (no base URL to set).[/dim]")
@@ -197,7 +220,13 @@ def _prompt_base_url(console: Console, preset: ProviderPreset) -> str:
     ).strip()
 
 
-def _prompt_api_key(console: Console, preset: ProviderPreset) -> str:
+def _prompt_api_key(
+    console: Console,
+    preset: ProviderPreset,
+    *,
+    no_open: bool = False,
+    timeout_seconds: int = 60,
+) -> str:
     """Prompt for the API key literal to store in config.yaml.
 
     Three behaviors depending on provider:
@@ -210,6 +239,34 @@ def _prompt_api_key(console: Console, preset: ProviderPreset) -> str:
     - Otherwise: prompt for the literal secret (Rich's Prompt masks
       it by default).
     """
+    if preset.auth_flow == "openai_codex":
+        from clearwing.providers.openai_oauth import (
+            ensure_fresh_openai_oauth_credentials,
+            load_openai_oauth_credentials,
+            login_openai_oauth,
+        )
+
+        existing = load_openai_oauth_credentials()
+        if existing:
+            try:
+                creds = ensure_fresh_openai_oauth_credentials()
+                console.print(
+                    f"[dim]Using stored OpenAI OAuth credentials for "
+                    f"account_id={creds.account_id}.[/dim]"
+                )
+                return ""
+            except Exception as exc:
+                console.print(f"[yellow]Stored OpenAI OAuth credentials need renewal: {exc}[/yellow]")
+
+        console.print("[dim]Starting OpenAI browser OAuth. Credentials are stored under ~/.clearwing/auth/.[/dim]")
+        creds = login_openai_oauth(
+            no_open=no_open,
+            timeout_seconds=timeout_seconds,
+            print_fn=console.print,
+        )
+        console.print(f"[green]OpenAI OAuth login complete.[/green] account_id={creds.account_id}")
+        return ""
+
     if preset.is_local and preset.api_key_env_var is None:
         placeholder = "ollama" if "11434" in (preset.default_base_url or "") else "not-needed"
         console.print(
@@ -266,6 +323,8 @@ def _print_config_preview(
     """Show the YAML that's about to be written, masking secrets."""
     masked = _mask_secret(api_key_literal)
     lines = ["provider:"]
+    if preset.auth_flow:
+        lines.append(f"  auth: {preset.auth_flow}")
     if base_url:
         lines.append(f"  base_url: {base_url}")
     if masked:
@@ -309,6 +368,8 @@ def _write_config(
     import yaml
 
     provider_section: dict[str, str] = {}
+    if preset.auth_flow:
+        provider_section["auth"] = preset.auth_flow
     if base_url:
         provider_section["base_url"] = base_url
     if api_key_literal:
@@ -353,6 +414,35 @@ def _run_test_invoke(
     service might be temporarily down).
     """
     from clearwing.providers import LLMEndpoint, ProviderManager
+
+    if preset.auth_flow == "openai_codex":
+        endpoint = LLMEndpoint(
+            provider="openai_codex",
+            model=model,
+            base_url=base_url,
+            api_key=None,
+            source="cli",
+        )
+        console.print("\n[dim]Testing endpoint...[/dim]", end=" ")
+        try:
+            llm = ProviderManager.for_endpoint(endpoint).get_llm("default")
+            start = time.monotonic()
+            response = llm.invoke("Reply with exactly the word PONG.")
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+        except Exception as exc:
+            console.print(f"\n[red]Test failed: {exc}[/red]")
+            console.print(
+                "[yellow]The config was still written. "
+                "Run `clearwing doctor` for a fuller diagnosis.[/yellow]"
+            )
+            return
+
+        content = getattr(response, "content", str(response))
+        if isinstance(content, list):
+            content = " ".join(str(p) for p in content)
+        snippet = str(content).strip()[:60]
+        console.print(f"[green]ok[/green] ({elapsed_ms}ms, reply: {snippet!r})")
+        return
 
     # Resolve the literal api_key if the user chose ${ENV_VAR} form
     resolved_key = api_key_literal

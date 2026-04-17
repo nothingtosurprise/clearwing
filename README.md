@@ -35,7 +35,7 @@ authorization, and disclosure. See `SECURITY.md`.
 **End users** — install the tagged release straight from GitHub:
 
 ```bash
-git clone --branch v1.0.0 https://github.com/Lazarus-AI/clearwing.git
+git clone https://github.com/Lazarus-AI/clearwing.git
 cd clearwing
 
 # uv sync is recommended because Clearwing pins genai-pyo3 through
@@ -95,7 +95,7 @@ clearwing scan 192.168.1.10 -p 22,80,443 --detect-services
 # Source-code hunt a repo (standard depth — sandboxed LLM hunters,
 # adversarial verifier, mechanism memory, variant loop)
 clearwing sourcehunt https://github.com/example/project \
-    --depth standard --budget 5
+    --depth standard
 
 # Interactive ReAct chat with the full tool set
 clearwing interactive
@@ -160,7 +160,7 @@ PY
 
 Findings land in `./sourcehunt-results-ffmpeg/sh-<session-id>/` as JSON +
 markdown once the run completes. FFmpeg is ~10k source files, so expect the
-ranker to split into ~150 chunks and the tier-A hunter pool to run for hours.
+large-repo ranker to preselect candidates and the tier-A hunter pool to run for hours.
 Redirect stdout/stderr to a file if you plan to detach the process — the
 runner's own artifacts are only written at the end.
 

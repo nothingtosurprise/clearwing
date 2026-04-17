@@ -173,7 +173,7 @@ def _check_llm_provider(cli, *, skip_invoke: bool) -> DoctorSection:
     section = DoctorSection("LLM provider")
 
     endpoint = resolve_llm_endpoint(
-        config_provider=cli.config.get_provider_section() or None,
+        config_provider=cli.config.get_provider_section(),
     )
 
     # Report the resolved triple + source
@@ -187,6 +187,16 @@ def _check_llm_provider(cli, *, skip_invoke: bool) -> DoctorSection:
     section.add(DoctorCheck("Source", STATUS_OK, endpoint.source))
 
     # Credential check
+    if endpoint.provider == "openai_codex" and not endpoint.api_key:
+        section.add(
+            DoctorCheck(
+                "Credentials",
+                STATUS_ERR,
+                "OpenAI OAuth credentials are not available",
+                hint="Run `clearwing setup --provider openai-oauth` and complete browser login.",
+            )
+        )
+        return section
     if not endpoint.api_key and endpoint.source == "default":
         section.add(
             DoctorCheck(
@@ -208,6 +218,8 @@ def _check_llm_provider(cli, *, skip_invoke: bool) -> DoctorSection:
                 "API key is empty (keyless endpoint is fine; otherwise broken)",
             )
         )
+    elif endpoint.provider == "openai_codex":
+        section.add(DoctorCheck("Credentials", STATUS_OK, "OpenAI OAuth token available"))
     else:
         section.add(DoctorCheck("Credentials", STATUS_OK, "api_key set"))
 
@@ -552,7 +564,7 @@ def _check_network(cli) -> DoctorSection:
     section = DoctorSection("Network")
 
     endpoint = resolve_llm_endpoint(
-        config_provider=cli.config.get_provider_section() or None,
+        config_provider=cli.config.get_provider_section(),
     )
 
     host = "api.anthropic.com"

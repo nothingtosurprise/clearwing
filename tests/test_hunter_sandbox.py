@@ -147,6 +147,7 @@ class TestHunterSandboxBuildImage:
         assert "FROM gcc:13" in df
         assert "ripgrep" in df
         assert "gdb" in df
+        assert "ltrace" not in df
 
     def test_dockerfile_sets_sanitizer_env(self, temp_repo: Path):
         (temp_repo / "Makefile").write_text("all:\n")

@@ -94,13 +94,13 @@ clearwing sourcehunt /path/to/repo --depth quick
 # Standard pass — sandboxed LLM hunters, adversarial verifier,
 # variant loop, mechanism memory, taint analysis. Default.
 clearwing sourcehunt https://github.com/example/project \
-    --depth standard --budget 5
+    --depth standard
 
 # Deep pass — adds crash-first harness generation (libFuzzer)
 # and auto-patch validation (recompile + rerun PoC). The most
 # rigorous mode; expects real build deps in the sandbox.
 clearwing sourcehunt /path/to/repo \
-    --depth deep --budget 10 --max-parallel 8 \
+    --depth deep --max-parallel 8 \
     --auto-patch
 ```
 

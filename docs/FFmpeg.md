@@ -34,43 +34,7 @@ Follow these rules if you want a meaningful recreation:
 
 ## Prerequisites
 
-Install Clearwing and configure a tool-calling model first:
-
-```bash
-git clone https://github.com/Lazarus-AI/clearwing.git
-cd clearwing
-
-# uv is recommended because Clearwing pins genai-pyo3 through tool.uv.sources.
-uv sync --all-extras
-source .venv/bin/activate  # fish: source .venv/bin/activate.fish
-
-clearwing setup
-clearwing doctor
-```
-
-If you need to use `pip` directly, install the pinned native model bridge from
-Git before installing Clearwing. Plain `pip install -e '.[all]'` will otherwise
-look for `genai-pyo3` on PyPI, where it is not published.
-
-```bash
-uv venv --python 3.12 --seed venv
-source venv/bin/activate  # fish: source venv/bin/activate.fish
-
-pip install \
-  'genai-pyo3 @ git+https://github.com/ropoctl/genai-pyo3@59e35864b8a00197ff992c50c90d5ef3132b53b1'
-pip install -e '.[all]'
-```
-
-You should also have:
-
-- Docker running, for sanitizer-backed hunter containers.
-- `git` and `rg` on the host.
-- A recent Rust toolchain if installing Clearwing from source; the native
-  model bridge builds a Rust extension. If the install fails with a Rust
-  version error, run `rustup update stable`.
-- Enough LLM budget. FFmpeg is a large, mature C codebase; a single run is
-  not guaranteed to rediscover the bug. Treat the commands below as a
-  reproducible workflow, not a deterministic one-shot benchmark.
+Install Clearwing per README.md
 
 ## Prepare The Vulnerable Checkout
 
@@ -117,7 +81,6 @@ mkdir -p "$CLEARWING_HOME" "$CLEARWING_SOURCEHUNT_TRACE_DIR" "$CASE_DIR/results"
 
 clearwing sourcehunt "$FFMPEG_DIR" \
   --depth deep \
-  --budget 50 \
   --max-parallel 8 \
   --no-mechanism-memory \
   --output-dir "$CASE_DIR/results" \
@@ -132,9 +95,8 @@ Why these flags:
   report generation.
 - `--no-mechanism-memory` prevents prior runs from influencing the hunter.
   The fresh `CLEARWING_HOME` is a second isolation layer.
-- `--budget 50` is a practical starting point for a local recreation. For a
-  large-codebase blind search, run multiple independent passes and raise the
-  budget as needed.
+- Budget is unlimited by default. Add `--budget 50` to cap spend for a local
+  recreation, or pass `--budget 0` explicitly to keep the unlimited default.
 
 The command writes a session directory under:
 
@@ -170,7 +132,6 @@ for i in 1 2 3 4 5; do
   CLEARWING_SOURCEHUNT_TRACE_DIR="$RUN_TRACE" \
   clearwing sourcehunt "$FFMPEG_DIR" \
     --depth deep \
-    --budget 50 \
     --max-parallel 8 \
     --no-mechanism-memory \
     --output-dir "$RUN_OUT" \
@@ -245,7 +206,6 @@ mkdir -p "$CLEARWING_HOME" "$CASE_DIR/results-fixed"
 
 clearwing sourcehunt "$FFMPEG_DIR" \
   --depth standard \
-  --budget 25 \
   --max-parallel 8 \
   --no-mechanism-memory \
   --output-dir "$CASE_DIR/results-fixed" \

@@ -103,7 +103,7 @@ class SourceHuntRunner:
         branch: str = "main",
         local_path: str | None = None,
         depth: str = "standard",  # quick | standard | deep
-        budget_usd: float = 5.0,
+        budget_usd: float = 0.0,
         max_parallel: int = 8,
         tier_budget: TierBudget | None = None,
         output_dir: str = "./sourcehunt-results",
@@ -779,10 +779,13 @@ class SourceHuntRunner:
                 languages=languages,
             )
             image_tag = manager.build_image()
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "HunterSandbox initialization failed; falling back to host mode", exc_info=True
+                "HunterSandbox unavailable (%s); falling back to host mode. "
+                "Start Docker to enable sanitizer-backed containers.",
+                exc,
             )
+            logger.debug("HunterSandbox initialization failed", exc_info=True)
             return
 
         logger.info("HunterSandbox ready image=%s", image_tag)

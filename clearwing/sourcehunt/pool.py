@@ -83,7 +83,7 @@ class HuntPoolConfig:
     # at run time and require an llm in the config.
     llm: object | None = None  # Required if hunter_factory is None
     max_parallel: int = 8
-    budget_usd: float = 5.0
+    budget_usd: float = 0.0
     tier_budget: TierBudget = field(default_factory=TierBudget)
     cost_limit_per_file_a: float = 0.25
     cost_limit_per_file_b: float = 0.15
@@ -124,9 +124,12 @@ class HunterPool:
 
         total_budget = self.config.budget_usd
         tb = self.config.tier_budget
-        budget_a = total_budget * tb.tier_a_fraction
-        budget_b = total_budget * tb.tier_b_fraction
-        budget_c = total_budget * tb.tier_c_fraction
+        if total_budget <= 0:
+            budget_a = budget_b = budget_c = float("inf")
+        else:
+            budget_a = total_budget * tb.tier_a_fraction
+            budget_b = total_budget * tb.tier_b_fraction
+            budget_c = total_budget * tb.tier_c_fraction
 
         spent_a = await self._run_tier_phase(
             by_tier["A"],

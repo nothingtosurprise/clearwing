@@ -81,6 +81,7 @@ class RankerConfig:
     max_inflight_chunks: int = 4
     llm_timeout_seconds: int | None = None
     large_repo_file_threshold: int = 2000
+    large_repo_llm_file_limit: int = 600
     include_static_hints: bool = True
     include_imports_by: bool = True
     static_hint_surface_floor: int = 3  # files with static_hint > 0 → min surface 3
@@ -134,18 +135,12 @@ class Ranker:
         # actionable tiers quickly.
         self._apply_heuristic_baseline(files)
 
-        if len(files) > self.config.large_repo_file_threshold:
-            logger.info(
-                "Large repo detected for ranker; heuristics applied to %d files, "
-                "LLM reranking all %d files",
-                len(files),
-                len(files),
-            )
-
-        chunks = self._chunk(files, self.config.chunk_size)
-        scores_by_chunk = await self._rank_chunks_bounded(chunks)
-        for chunk, scores in zip(chunks, scores_by_chunk, strict=False):
-            self._apply_scores(chunk, scores)
+        llm_candidates = self._select_llm_candidates(files)
+        if llm_candidates:
+            chunks = self._chunk(llm_candidates, self.config.chunk_size)
+            scores_by_chunk = await self._rank_chunks_bounded(chunks)
+            for chunk, scores in zip(chunks, scores_by_chunk, strict=False):
+                self._apply_scores(chunk, scores)
 
         # Apply floors and compute priority for every file
         for ft in files:
@@ -196,9 +191,56 @@ class Ranker:
         for ft in files:
             ft["surface"] = self._fallback_surface(ft)
             ft["influence"] = self._fallback_influence(ft)
+            ft["surface_rationale"] = "heuristic baseline"
+            ft["influence_rationale"] = "heuristic baseline"
             self._apply_floors(ft)
             ft["priority"] = self._compute_priority(ft)
             self._apply_fuzzable_boost(ft)
+
+    def _select_llm_candidates(self, files: list[FileTarget]) -> list[FileTarget]:
+        if len(files) <= self.config.large_repo_file_threshold:
+            return files
+
+        limit = max(0, self.config.large_repo_llm_file_limit)
+        if limit == 0:
+            logger.info(
+                "Large repo detected for ranker; heuristics applied to %d files, "
+                "LLM reranking disabled",
+                len(files),
+            )
+            return []
+
+        candidates = [
+            ft
+            for _, ft in sorted(
+                enumerate(files),
+                key=lambda item: self._candidate_sort_key(item[0], item[1]),
+                reverse=True,
+            )[:limit]
+        ]
+        logger.info(
+            "Large repo detected for ranker; heuristics applied to %d files, "
+            "LLM reranking top %d files",
+            len(files),
+            len(candidates),
+        )
+        return candidates
+
+    @staticmethod
+    def _candidate_sort_key(index: int, ft: FileTarget) -> tuple:
+        influence_signal = ft.get("transitive_callers", 0) or ft.get("imports_by", 0)
+        static_signals = (
+            ft.get("static_hint", 0) + ft.get("semgrep_hint", 0) + ft.get("taint_hits", 0)
+        )
+        return (
+            ft.get("priority", 0.0),
+            ft.get("surface", 0),
+            ft.get("influence", 0),
+            static_signals,
+            influence_signal,
+            ft.get("loc", 0),
+            -index,
+        )
 
     # --- Chunking -----------------------------------------------------------
 

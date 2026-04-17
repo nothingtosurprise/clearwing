@@ -26,7 +26,7 @@ def hunt_source_code(
     repo_url_or_path: str,
     branch: str = "main",
     depth: str = "quick",
-    budget_usd: float = 2.0,
+    budget_usd: float = 0.0,
     output_dir: str = "./sourcehunt-results",
 ) -> str:
     """Run the Clearwing source-code vulnerability hunting pipeline against a repo.
@@ -41,7 +41,7 @@ def hunt_source_code(
         depth: 'quick' (preprocessor + static analysis only, no LLM hunters),
                'standard' (LLM hunters on rank A/B + verifier),
                'deep' (everything + Tier C propagation audit + exploit triage).
-        budget_usd: Max dollars to spend. Default $2.
+        budget_usd: Max dollars to spend. Defaults to unlimited; 0 means unlimited.
         output_dir: Where to write the SARIF / markdown / JSON outputs.
 
     Returns:

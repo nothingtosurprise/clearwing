@@ -69,7 +69,15 @@ class TestProviderCatalog:
         assert preset_by_key("openrouter").display_name == "OpenRouter"
         assert preset_by_key("OPENROUTER").display_name == "OpenRouter"  # case-insensitive
         assert preset_by_key("ollama").is_local
+        assert preset_by_key("openai-codex").key == "openai-oauth"
+        assert preset_by_key("openai_oauth").key == "openai-oauth"
         assert preset_by_key("unknown-provider") is None
+
+    def test_openai_oauth_preset_is_not_openai_compat(self):
+        preset = preset_by_key("openai-oauth")
+        assert preset is not None
+        assert preset.auth_flow == "openai_codex"
+        assert not preset.is_openai_compat
 
 
 # --- Setup wizard: _mask_secret -------------------------------------------
@@ -226,6 +234,24 @@ class TestWriteConfig:
         assert "base_url" not in data["provider"]
         assert data["provider"]["model"] == "claude-sonnet-4-6"
         assert data["provider"]["api_key"] == "sk-ant-test"
+
+    def test_openai_oauth_writes_auth_marker_without_api_key(self, tmp_cli):
+        preset = preset_by_key("openai-oauth")
+        _write_config(
+            tmp_cli,
+            preset,
+            base_url="https://chatgpt.com/backend-api",
+            api_key_literal="",
+            model="gpt-5.2",
+        )
+        data = yaml.safe_load(tmp_cli.config.DEFAULT_CONFIG_PATH.read_text())
+        assert data == {
+            "provider": {
+                "auth": "openai_codex",
+                "base_url": "https://chatgpt.com/backend-api",
+                "model": "gpt-5.2",
+            }
+        }
 
 
 # --- Doctor: DoctorCheck + DoctorSection aggregation ---------------------

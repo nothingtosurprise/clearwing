@@ -147,12 +147,13 @@ def compute_sanitizer_env(recipe: BuildRecipe, sanitizers: list[str]) -> dict[st
 
 
 # Tools we want available in every hunter sandbox image: ripgrep for grep_source,
-# gdb/strace for debugging, coreutils' `timeout` for exec timeouts.
+# gdb/strace for debugging, coreutils' `timeout` for exec timeouts. Keep this
+# list portable across base-image architectures; ltrace is useful but is not
+# available everywhere.
 COMMON_APT_PACKAGES = [
     "ripgrep",
     "gdb",
     "strace",
-    "ltrace",
     "coreutils",
     "ca-certificates",
     "build-essential",

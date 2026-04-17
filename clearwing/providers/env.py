@@ -54,7 +54,7 @@ class LLMEndpoint:
     """The resolved LLM configuration for one command invocation.
 
     Fields:
-        provider: "anthropic" | "openai_compat" | "ollama" — decides
+        provider: "anthropic" | "openai_compat" | "openai_codex" | "ollama" — decides
                   which native transport configuration handles the actual call.
         model:    The model identifier as the provider expects it
                   (e.g. "claude-sonnet-4-6", "anthropic/claude-opus-4"
@@ -84,7 +84,7 @@ class LLMEndpoint:
 
         That covers: OpenRouter, Ollama (via /v1), LM Studio, vLLM,
         Together, Fireworks, Groq, Anyscale, SiliconFlow, DeepSeek,
-        and OpenAI direct.
+        and OpenAI direct. ChatGPT/Codex OAuth is not OpenAI-compatible.
         """
         return self.provider == "openai_compat"
 
@@ -186,6 +186,20 @@ def resolve_llm_endpoint(
 
     # 3. YAML config.yaml provider: section
     if config_provider:
+        cfg_auth = _normalize_auth_flow(
+            config_provider.get("auth") or config_provider.get("auth_flow")
+        )
+        if cfg_auth == "openai_codex":
+            cfg_base_url = config_provider.get("base_url") or _openai_codex_default_base_url()
+            cfg_model = config_provider.get("model") or _openai_codex_default_model()
+            return LLMEndpoint(
+                provider="openai_codex",
+                model=str(cfg_model),
+                base_url=str(cfg_base_url),
+                api_key=_openai_oauth_access_token(),
+                source="config",
+            )
+
         cfg_base_url = config_provider.get("base_url")
         cfg_model = config_provider.get("model")
         cfg_api_key = _resolve_config_secret(config_provider.get("api_key"))
@@ -259,6 +273,46 @@ def _resolve_config_secret(value: Any) -> str | None:
         env_name = s[2:-1]
         return os.environ.get(env_name)
     return s
+
+
+def _normalize_auth_flow(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    aliases = {
+        "openai-oauth": "openai_codex",
+        "openai_oauth": "openai_codex",
+        "openai-codex": "openai_codex",
+        "openai_codex": "openai_codex",
+        "codex": "openai_codex",
+    }
+    return aliases.get(raw, raw)
+
+
+def _openai_codex_default_base_url() -> str:
+    try:
+        from clearwing.providers.openai_oauth import OPENAI_CODEX_DEFAULT_BASE_URL
+
+        return OPENAI_CODEX_DEFAULT_BASE_URL
+    except Exception:
+        return "https://chatgpt.com/backend-api"
+
+
+def _openai_codex_default_model() -> str:
+    try:
+        from clearwing.providers.openai_oauth import OPENAI_CODEX_DEFAULT_MODEL
+
+        return OPENAI_CODEX_DEFAULT_MODEL
+    except Exception:
+        return "gpt-5.2"
+
+
+def _openai_oauth_access_token() -> str | None:
+    try:
+        from clearwing.providers.openai_oauth import ensure_fresh_openai_oauth_credentials
+
+        return ensure_fresh_openai_oauth_credentials().access
+    except Exception:
+        logger.debug("OpenAI OAuth credentials unavailable", exc_info=True)
+        return None
 
 
 def _default_openai_compat_model(base_url: str) -> str:

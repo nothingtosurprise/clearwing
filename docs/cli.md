@@ -31,7 +31,7 @@ with `clearwing report` or `clearwing history`.
 clearwing sourcehunt <repo_url_or_path>
   [--branch BRANCH]           # default: main
   [--depth quick|standard|deep]
-  [--budget USD]              # default: 5.0 (USD spend cap)
+  [--budget USD]              # default: unlimited; 0 = unlimited
   [--max-parallel N]          # default: 8
   [--tier-split A/B/C]        # default: 70/25/5
   [--no-verify]               # skip the adversarial verifier

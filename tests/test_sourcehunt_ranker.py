@@ -245,6 +245,34 @@ class TestChunking:
         Ranker(llm, RankerConfig(chunk_size=100)).rank(files)
         assert llm.aask_json.call_count == 3
 
+    def test_large_repo_reranks_only_top_heuristic_candidates(self):
+        llm = _mock_llm_returning([])
+        files = [
+            _make_file("parser.c", tags=["parser"]),
+            _make_file("static.c", static_hint=1),
+            _make_file("large.c", loc=1000),
+            _make_file("boring1.c"),
+            _make_file("boring2.c"),
+            _make_file("boring3.c"),
+        ]
+
+        Ranker(
+            llm,
+            RankerConfig(
+                chunk_size=2,
+                large_repo_file_threshold=3,
+                large_repo_llm_file_limit=3,
+            ),
+        ).rank(files)
+
+        assert llm.aask_json.call_count == 2
+        ranked_payload = "\n".join(call.kwargs["user"] for call in llm.aask_json.call_args_list)
+        assert "parser.c" in ranked_payload
+        assert "static.c" in ranked_payload
+        assert "large.c" in ranked_payload
+        assert "boring3.c" not in ranked_payload
+        assert all(file["priority"] > 0 for file in files)
+
 
 # --- LLM response handling ---------------------------------------------------
 
