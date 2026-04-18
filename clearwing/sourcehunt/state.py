@@ -145,6 +145,25 @@ class SubsystemTarget:
     source: str = "auto"  # "auto" | "manual"
 
 
+# --- ElaborationResult (spec 008) --------------------------------------------
+
+
+@dataclass
+class ElaborationResult:
+    """Result of a Stage 1.5 exploit elaboration attempt."""
+
+    original_finding_id: str
+    elaborated: bool
+    upgraded_impact: str | None = None
+    upgraded_exploit_code: str | None = None
+    chained_findings: list[str] = field(default_factory=list)
+    upgrade_path: str = ""
+    blocking_mitigations: list[str] = field(default_factory=list)
+    human_guided: bool = False
+    cost: float = 0.0
+    transcript_path: str = ""
+
+
 # --- SourceHuntState ---------------------------------------------------------
 
 
@@ -193,6 +212,7 @@ class SourceHuntState(TypedDict, total=False):
         "verify",
         "variant_loop",
         "exploit",
+        "elaborate",
         "auto_patch",
         "report",
     ]

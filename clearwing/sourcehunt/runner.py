@@ -78,6 +78,7 @@ class SourceHuntResult:
     session_id: str = ""
     subsystems_hunted: int = 0
     subsystem_spent_usd: float = 0.0
+    elaborated_findings: list[Finding] = field(default_factory=list)
 
     @property
     def critical_count(self) -> int:
@@ -94,6 +95,49 @@ class SourceHuntResult:
             for f in self.verified_findings
             if (f.get("severity_verified") or f.get("severity")) == "high"
         )
+
+
+_IMPACT_TO_SEVERITY = {
+    "code_execution": "critical",
+    "remote_code_execution": "critical",
+    "sandbox_escape": "critical",
+    "privilege_escalation": "critical",
+    "cross_origin_bypass": "high",
+    "info_disclosure": "high",
+    "denial_of_service": "medium",
+}
+
+
+def _apply_elaboration(finding: Finding, elab_result) -> Finding:
+    """Create a new finding from a successful elaboration."""
+    import uuid
+
+    sev = _IMPACT_TO_SEVERITY.get(
+        elab_result.upgraded_impact or "", "high",
+    )
+    return {
+        "id": f"elab-{uuid.uuid4().hex[:8]}",
+        "related_finding_id": finding.get("id", "unknown"),
+        "file": finding.get("file", ""),
+        "line_number": finding.get("line_number"),
+        "end_line": finding.get("end_line"),
+        "finding_type": finding.get("finding_type", "unknown"),
+        "cwe": finding.get("cwe"),
+        "severity": sev,
+        "severity_verified": sev,
+        "evidence_level": "exploit_demonstrated",
+        "verified": True,
+        "description": (
+            f"Elaborated from {finding.get('id', '?')}: "
+            f"{elab_result.upgrade_path}"
+        ),
+        "exploit": elab_result.upgraded_exploit_code or "",
+        "exploit_success": True,
+        "exploit_impact": elab_result.upgraded_impact or "",
+        "discovered_by": "elaboration_agent",
+        "elaboration_upgrade_path": elab_result.upgrade_path,
+        "exploit_chained_findings": elab_result.chained_findings,
+    }
 
 
 class SourceHuntRunner:
@@ -113,6 +157,8 @@ class SourceHuntRunner:
         no_verify: bool = False,
         no_exploit: bool = False,
         exploit_budget: str | None = None,  # "standard" | "deep" | "campaign" | None (auto)
+        enable_elaboration: bool = False,  # v0.4: Stage 1.5 exploit elaboration
+        elaboration_cap: str = "10%",  # max findings to elaborate
         adversarial_verifier: bool = True,  # v0.2: on by default
         adversarial_threshold: EvidenceLevel | None = "static_corroboration",  # v0.4: budget gate
         enable_mechanism_memory: bool = True,  # v0.3: cross-run mechanism store
@@ -165,6 +211,8 @@ class SourceHuntRunner:
         self.no_verify = no_verify
         self.no_exploit = no_exploit
         self._exploit_budget_override = exploit_budget
+        self.enable_elaboration = enable_elaboration
+        self._elaboration_cap = elaboration_cap
         self.adversarial_verifier = adversarial_verifier
         self.adversarial_threshold = adversarial_threshold
         self.enable_mechanism_memory = enable_mechanism_memory
@@ -746,6 +794,49 @@ class SourceHuntRunner:
                                     exploited.append(finding)
                             except Exception:
                                 logger.warning("Exploiter failed", exc_info=True)
+
+            # 5.25. Stage 1.5: Exploit elaboration (autonomous, opt-in).
+            elaborated: list[Finding] = []
+            if self.enable_elaboration and exploited:
+                from .elaboration import (
+                    ElaborationAgent,
+                    prioritize_for_elaboration,
+                )
+
+                elaboration_llm = self._get_native_client(
+                    "sourcehunt_exploit", self.exploiter_llm,
+                )
+                if elaboration_llm is not None:
+                    targets = prioritize_for_elaboration(
+                        exploited, self._elaboration_cap,
+                    )
+                    if targets:
+                        elab_agent = ElaborationAgent(
+                            llm=elaboration_llm,
+                            sandbox_manager=self._sandbox_manager,
+                            sandbox_factory=self.sandbox_factory,
+                            findings_pool=findings_pool,
+                            budget_band=self._exploit_budget_band,
+                            output_dir=str(self._ensure_output_dir_layout()),
+                            project_name=(
+                                self.repo_url.split("/")[-1]
+                                if self.repo_url else "target"
+                            ),
+                        )
+                        for finding in targets:
+                            try:
+                                elab_result = await elab_agent.aattempt(finding)
+                                if elab_result.elaborated:
+                                    elab_finding = _apply_elaboration(
+                                        finding, elab_result,
+                                    )
+                                    all_findings.append(elab_finding)
+                                    elaborated.append(elab_finding)
+                            except Exception:
+                                logger.warning(
+                                    "Elaboration failed for %s",
+                                    finding.get("id"), exc_info=True,
+                                )
 
             # 5.5. v0.3: Auto-patch mode (opt-in).
             # The verify-by-recompile gate is MANDATORY — a patch is only marked

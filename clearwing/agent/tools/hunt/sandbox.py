@@ -44,6 +44,7 @@ class HunterContext:
     findings_pool: object | None = None  # FindingsPool (avoiding circular import)
     trajectory_dir: object | None = None  # Path override for transcript output
     exploit_result: object | None = None  # ExploiterResult slot for exploit agent
+    elaboration_result: object | None = None  # ElaborationResult slot for elaboration agent
 
     def get_sandbox_for_variant(
         self,

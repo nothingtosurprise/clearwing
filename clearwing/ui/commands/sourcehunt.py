@@ -178,6 +178,48 @@ def add_parser(subparsers):
              "standard=$25/1hr, deep=$200/4hr, campaign=$2000/12hr.",
     )
     parser.add_argument(
+        "--elaborate",
+        metavar="FINDING_ID",
+        default=None,
+        help="Launch interactive HITL session to elaborate a finding from a previous run.",
+    )
+    parser.add_argument(
+        "--elaborate-auto",
+        action="store_true",
+        default=False,
+        dest="elaborate_auto",
+        help="Run autonomous elaboration agent (no human guidance).",
+    )
+    parser.add_argument(
+        "--elaborate-top",
+        type=int,
+        default=None,
+        dest="elaborate_top",
+        metavar="N",
+        help="Elaborate on the top N findings by severity/primitive quality.",
+    )
+    parser.add_argument(
+        "--elaborate-cap",
+        default=None,
+        dest="elaborate_cap",
+        metavar="PERCENT_OR_INT",
+        help="Cap elaboration at N%% of verified findings or absolute count (default: 10%%).",
+    )
+    parser.add_argument(
+        "--elaborate-session",
+        default=None,
+        dest="elaborate_session",
+        metavar="SESSION_ID",
+        help="Session ID to load findings from (for --elaborate modes).",
+    )
+    parser.add_argument(
+        "--elaborate-pipeline",
+        action="store_true",
+        default=False,
+        dest="elaborate_pipeline",
+        help="Enable Stage 1.5 elaboration in the pipeline (autonomous, top 10%%).",
+    )
+    parser.add_argument(
         "--no-variant-loop",
         action="store_true",
         help="Skip the variant hunter loop (v0.3 compounding)",
@@ -421,6 +463,50 @@ def handle(cli, args):
             )
         sys.exit(0)
 
+    # Elaborate mode: interactive HITL or autonomous agent
+    if args.elaborate or args.elaborate_auto:
+        from ...sourcehunt.elaboration import (
+            ElaborationAgent,
+            find_latest_session,
+            load_finding_from_session,
+            load_session_findings,
+            prioritize_for_elaboration,
+        )
+
+        session_id = args.elaborate_session or find_latest_session(
+            args.output_dir,
+        )
+        if not session_id:
+            cli.console.print(
+                "[red]No session found. Use --elaborate-session SESSION_ID.[/red]"
+            )
+            sys.exit(1)
+
+        if args.elaborate:
+            finding = load_finding_from_session(
+                args.output_dir, session_id, args.elaborate,
+            )
+            if finding is None:
+                cli.console.print(
+                    f"[red]Finding {args.elaborate} not found in session {session_id}[/red]"
+                )
+                sys.exit(1)
+            _run_elaborate_interactive(
+                cli, args, finding, session_id, endpoint, provider_manager,
+            )
+        else:
+            all_findings = load_session_findings(args.output_dir, session_id)
+            verified = [f for f in all_findings if f.get("verified")]
+            cap = args.elaborate_top or args.elaborate_cap or "10%"
+            targets = prioritize_for_elaboration(verified, cap)
+            if not targets:
+                cli.console.print("[yellow]No findings eligible for elaboration.[/yellow]")
+                sys.exit(0)
+            _run_elaborate_auto(
+                cli, args, targets, session_id, endpoint, provider_manager,
+            )
+        sys.exit(0)
+
     # Webhook mode: start an HTTP server that runs sourcehunt on each commit
     if args.webhook:
         from ...sourcehunt.commit_monitor import CommitMonitor, CommitMonitorConfig
@@ -530,6 +616,7 @@ def handle(cli, args):
         no_verify=args.no_verify,
         no_exploit=args.no_exploit,
         exploit_budget=args.exploit_budget,
+        enable_elaboration=args.elaborate_pipeline,
         adversarial_verifier=not args.no_adversarial,
         adversarial_threshold=(
             None if args.adversarial_threshold == "always" else args.adversarial_threshold
@@ -608,3 +695,196 @@ def handle(cli, args):
             cli.console.print(f"  [{sev}] {file}:{line} — {desc}")
 
     sys.exit(result.exit_code)
+
+
+# --- Elaborate helpers -------------------------------------------------------
+
+
+def _run_elaborate_interactive(cli, args, finding, session_id, endpoint, provider_manager):
+    """Launch an interactive HITL elaboration session."""
+    import asyncio
+    import json
+
+    from rich.prompt import Prompt
+
+    from ...sourcehunt.elaboration import (
+        ElaborationAgent,
+        _build_elaboration_prompt,
+        build_elaboration_tools,
+    )
+
+    cli.console.print(f"\n[bold blue]Elaboration session for {finding.get('id', '?')}[/bold blue]")
+    cli.console.print(f"  File: {finding.get('file', '?')}:{finding.get('line_number', '?')}")
+    cli.console.print(f"  CWE: {finding.get('cwe', 'N/A')}")
+    cli.console.print(
+        f"  Current impact: "
+        f"{finding.get('exploit_impact') or finding.get('impact') or 'unknown'}"
+    )
+    cli.console.print(
+        f"  Primitive: "
+        f"{finding.get('exploit_primitive_type') or finding.get('primitive_type') or 'unknown'}"
+    )
+    cli.console.print("\nType your guidance to upgrade the exploit. Type 'quit' to end.\n")
+
+    try:
+        llm = provider_manager.get_llm("default")
+    except Exception as e:
+        cli.console.print(f"[red]Could not build LLM: {e}[/red]")
+        sys.exit(1)
+
+    system_prompt = _build_elaboration_prompt(finding)
+    messages: list[dict] = [
+        {"role": "user", "content": (
+            f"I'm working with you to upgrade the exploit for finding {finding.get('id', '?')}. "
+            f"The current impact is {finding.get('exploit_impact') or 'unknown'}. "
+            f"Let's start by reviewing what we have."
+        )},
+    ]
+
+    from ...agent.tools.hunt.sandbox import HunterContext
+
+    ctx = HunterContext(
+        repo_path="/workspace",
+        file_path=finding.get("file"),
+        session_id=f"elaborate-hitl-{session_id}",
+        specialist="elaboration",
+    )
+    tools = build_elaboration_tools(ctx, finding)
+    tool_schemas = [{"name": t.name, "description": t.description, "input_schema": t.schema} for t in tools]
+    tool_handlers = {t.name: t.handler for t in tools}
+
+    total_cost = 0.0
+
+    async def _chat_turn(user_input: str) -> str:
+        nonlocal total_cost
+        messages.append({"role": "user", "content": user_input})
+        try:
+            response = await llm.achat(
+                messages=messages,
+                system=system_prompt,
+                tools=tool_schemas,
+            )
+        except Exception as e:
+            return f"[red]LLM error: {e}[/red]"
+
+        assistant_text = ""
+        content_blocks = response.content if hasattr(response, "content") else []
+        for block in content_blocks:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    assistant_text += block.get("text", "")
+                elif block.get("type") == "tool_use":
+                    tool_name = block.get("name", "")
+                    tool_input = block.get("input", {})
+                    handler = tool_handlers.get(tool_name)
+                    if handler:
+                        try:
+                            tool_result = handler(**tool_input)
+                            cli.console.print(f"  [dim]Tool {tool_name}: {tool_result}[/dim]")
+                        except Exception as e:
+                            cli.console.print(f"  [red]Tool {tool_name} error: {e}[/red]")
+
+        messages.append({"role": "assistant", "content": content_blocks})
+        if hasattr(response, "usage"):
+            usage = response.usage
+            if hasattr(usage, "cost_usd"):
+                total_cost += usage.cost_usd
+
+        return assistant_text
+
+    while True:
+        try:
+            user_input = Prompt.ask("[bold green]You[/bold green]")
+        except (EOFError, KeyboardInterrupt):
+            break
+        if user_input.strip().lower() in ("quit", "exit", "done"):
+            break
+        if not user_input.strip():
+            continue
+
+        result_text = asyncio.run(_chat_turn(user_input))
+        if result_text:
+            cli.console.print(f"\n[bold blue]Assistant[/bold blue]: {result_text}\n")
+
+        if ctx.elaboration_result is not None:
+            break
+
+    if ctx.elaboration_result is not None:
+        ctx.elaboration_result.human_guided = True
+        ctx.elaboration_result.cost = total_cost
+        result = ctx.elaboration_result
+        cli.console.print("\n[bold]Elaboration result:[/bold]")
+        cli.console.print(f"  Elaborated: {result.elaborated}")
+        if result.upgraded_impact:
+            cli.console.print(f"  Upgraded impact: {result.upgraded_impact}")
+        if result.upgrade_path:
+            cli.console.print(f"  Upgrade path: {result.upgrade_path}")
+        if result.blocking_mitigations:
+            cli.console.print(f"  Blocking: {', '.join(result.blocking_mitigations)}")
+
+        out_dir = os.path.join(args.output_dir, session_id, "elaborations")
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, f"{finding.get('id', 'unknown')}.json")
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(result.__dict__, f, indent=2, default=str)
+        cli.console.print(f"  Saved: {out_path}")
+    else:
+        cli.console.print("\n[yellow]Session ended without recording a result.[/yellow]")
+
+    cli.console.print(f"  Total cost: ${total_cost:.4f}")
+
+
+def _run_elaborate_auto(cli, args, targets, session_id, endpoint, provider_manager):
+    """Run autonomous elaboration on a list of findings."""
+    import asyncio
+    import json
+
+    from ...sourcehunt.elaboration import ElaborationAgent
+
+    cli.console.print(
+        f"\n[bold blue]Autonomous elaboration: {len(targets)} findings[/bold blue]"
+    )
+
+    try:
+        llm = provider_manager.get_llm("default")
+    except Exception as e:
+        cli.console.print(f"[red]Could not build LLM: {e}[/red]")
+        sys.exit(1)
+
+    agent = ElaborationAgent(
+        llm=llm,
+        output_dir=args.output_dir,
+        project_name=args.repo.split("/")[-1] if args.repo else "target",
+    )
+
+    async def _run_all():
+        results = []
+        for i, finding in enumerate(targets, 1):
+            fid = finding.get("id", "?")
+            cli.console.print(f"\n[bold]({i}/{len(targets)}) Elaborating {fid}...[/bold]")
+            result = await agent.aattempt(finding)
+            results.append(result)
+            status = "[green]UPGRADED[/green]" if result.elaborated else "[yellow]NOT UPGRADED[/yellow]"
+            cli.console.print(f"  Result: {status}")
+            if result.upgraded_impact:
+                cli.console.print(f"  Upgraded impact: {result.upgraded_impact}")
+            if result.upgrade_path:
+                cli.console.print(f"  Path: {result.upgrade_path}")
+            if result.blocking_mitigations:
+                cli.console.print(f"  Blocking: {', '.join(result.blocking_mitigations)}")
+        return results
+
+    results = asyncio.run(_run_all())
+
+    out_dir = os.path.join(args.output_dir, session_id, "elaborations")
+    os.makedirs(out_dir, exist_ok=True)
+    for r in results:
+        out_path = os.path.join(out_dir, f"{r.original_finding_id}.json")
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(r.__dict__, f, indent=2, default=str)
+
+    upgraded = sum(1 for r in results if r.elaborated)
+    total_cost = sum(r.cost for r in results)
+    cli.console.print(f"\n[bold]Elaboration complete: {upgraded}/{len(results)} upgraded[/bold]")
+    cli.console.print(f"  Total cost: ${total_cost:.4f}")
+    cli.console.print(f"  Results saved: {out_dir}")

@@ -280,6 +280,14 @@ def _render_markdown(
             )
         if f.get("exploit_cost_usd"):
             lines.append(f"- **Exploit cost:** ${f['exploit_cost_usd']:.2f}")
+        if f.get("discovered_by") == "elaboration_agent":
+            lines.append(
+                f"- **Elaborated from:** {f.get('related_finding_id', '?')}"
+            )
+        if f.get("elaboration_upgrade_path"):
+            lines.append(
+                f"- **Upgrade path:** {f['elaboration_upgrade_path']}"
+            )
         lines.append("")
 
     return "\n".join(lines)
