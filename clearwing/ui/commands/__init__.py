@@ -7,6 +7,7 @@ from . import (
     config,
     disclose,
     doctor,
+    eval,
     graph,
     history,
     interactive,
@@ -40,4 +41,5 @@ ALL_COMMANDS = [
     disclose,
     campaign,
     bench,
+    eval,
 ]

@@ -204,6 +204,8 @@ class SourceHuntRunner:
         enable_behavior_monitor: bool = True,
         enable_artifact_store: bool = False,
         gvisor_runtime: str | None = None,
+        preprocessing: bool = True,
+        seed_harness_crashes: bool = False,
     ):
         self.repo_url = repo_url
         self.branch = branch
@@ -275,6 +277,8 @@ class SourceHuntRunner:
         self._enable_behavior_monitor = enable_behavior_monitor
         self._enable_artifact_store = enable_artifact_store
         self._gvisor_runtime = gvisor_runtime
+        self._preprocessing = preprocessing
+        self._seed_harness_crashes = seed_harness_crashes
 
     def _inject_campaign_pool(
         self,
@@ -343,6 +347,9 @@ class SourceHuntRunner:
                 logger.info("Ranker starting on %d files", len(files))
                 try:
                     ranker_config = RankerConfig()
+                    if not self._preprocessing:
+                        ranker_config.include_static_hints = False
+                        ranker_config.include_imports_by = False
                     if ranker_llm.provider_name == "openai_resp":
                         ranker_config.chunk_size = 30
                         ranker_config.max_inflight_chunks = self.max_parallel
@@ -375,10 +382,10 @@ class SourceHuntRunner:
                     files_ranked=files_ranked,
                 )
 
-            # 2.5. Harness Generator (crash-first ordering) — only at depth=deep
-            #      and only if we have a sandbox and an LLM.
+            # 2.5. Harness Generator (crash-first ordering) — at depth=deep or
+            #      when seed_harness_crashes is explicitly enabled (spec 018).
             seeded_crashes: list[SeededCrash] = []
-            if self.depth == "deep":
+            if self.depth == "deep" or self._seed_harness_crashes:
                 harness_llm = self._get_native_client("hunter", self.hunter_llm)
                 harness_sandbox = self._sandbox_manager or self.sandbox_factory
                 if harness_llm is not None and harness_sandbox is not None:
@@ -1366,10 +1373,10 @@ class SourceHuntRunner:
             branch=self.branch,
             local_path=self.local_path,
             tag_files=True,
-            build_callgraph=(self.depth != "quick"),
-            propagate_reachability=(self.depth != "quick"),
-            run_semgrep=(self.depth != "quick"),
-            run_taint=(self.depth != "quick"),  # v0.4: taint analysis
+            build_callgraph=(self.depth != "quick" and self._preprocessing),
+            propagate_reachability=(self.depth != "quick" and self._preprocessing),
+            run_semgrep=(self.depth != "quick" and self._preprocessing),
+            run_taint=(self.depth != "quick" and self._preprocessing),
         )
         return pp.run()
 
