@@ -65,6 +65,8 @@ class WorkItem:
     band: str  # "fast" | "standard" | "deep"
     attempt: int = 0
     seed_transcript: str | None = None
+    entry_point: Any = None  # EntryPoint | None — spec 004
+    seed_context: str | None = None  # spec 004 seed corpus
 
 
 def _file_rank(file_target: FileTarget) -> int:
@@ -184,6 +186,20 @@ class HuntPoolConfig:
     max_band: str = "standard"  # highest band promotion can reach
     band_budget: BandBudget = field(default_factory=BandBudget)
     redundancy_override: int | None = None
+    entry_points_by_file: dict = field(default_factory=dict)  # {path: [EntryPoint]}
+    seed_corpus_by_file: dict = field(default_factory=dict)  # {path: [SeedCorpusEntry]}
+    shard_entry_points: bool = False
+
+
+def _format_seed_context(entries: list) -> str | None:
+    """Format seed corpus entries for prompt injection. Returns None if empty."""
+    if not entries:
+        return None
+    try:
+        from .seed_corpus import format_seed_context
+        return format_seed_context(entries) or None
+    except ImportError:
+        return None
 
 
 def _extract_transcript(result: TargetResult) -> str:
@@ -218,13 +234,38 @@ class HunterPool:
         return asyncio.run(self.arun())
 
     def _expand_to_work_items(self, files: list[FileTarget], band: str) -> list[WorkItem]:
-        """Expand files into WorkItems respecting redundancy policy."""
+        """Expand files into WorkItems respecting redundancy and entry-point sharding."""
         items: list[WorkItem] = []
         for ft in files:
             rank = _file_rank(ft)
             n = _redundancy_for_rank(rank, self.config.redundancy_override)
-            for attempt in range(n):
-                items.append(WorkItem(file_target=ft, band=band, attempt=attempt))
+            file_path = ft.get("path", "")
+            entry_points = (
+                self.config.entry_points_by_file.get(file_path, [])
+                if self.config.shard_entry_points and rank >= 4
+                else []
+            )
+            seed_entries = self.config.seed_corpus_by_file.get(file_path, [])
+
+            if entry_points:
+                for ep in entry_points:
+                    ep_seeds = [
+                        s for s in seed_entries
+                        if s.function_name is None or s.function_name == ep.function_name
+                    ]
+                    seed_ctx = _format_seed_context(ep_seeds) if ep_seeds else None
+                    for attempt in range(n):
+                        items.append(WorkItem(
+                            file_target=ft, band=band, attempt=attempt,
+                            entry_point=ep, seed_context=seed_ctx,
+                        ))
+            else:
+                seed_ctx = _format_seed_context(seed_entries) if seed_entries else None
+                for attempt in range(n):
+                    items.append(WorkItem(
+                        file_target=ft, band=band, attempt=attempt,
+                        seed_context=seed_ctx,
+                    ))
         return items
 
     async def arun(self) -> list[Finding]:
@@ -340,7 +381,6 @@ class HunterPool:
             if wi is None:
                 return False
             band_cost = self.config.band_budget.for_band(wi.band)
-            key = f"{wi.file_target.get('path', '')}:{wi.band}:{wi.attempt}"
             task = asyncio.create_task(
                 self._run_file_task(
                     wi.file_target,
@@ -348,6 +388,8 @@ class HunterPool:
                     tier=tier,
                     band=wi.band,
                     seed_transcript=wi.seed_transcript,
+                    entry_point=wi.entry_point,
+                    seed_context=wi.seed_context,
                 )
             )
             in_flight[task] = wi
@@ -403,7 +445,8 @@ class HunterPool:
                         tier=tier,
                         band=wi.band,
                     )
-                self._results[f"{key}:{wi.band}:{wi.attempt}"] = result
+                ep_suffix = f":{wi.entry_point.function_name}" if wi.entry_point else ""
+                self._results[f"{key}{ep_suffix}:{wi.band}:{wi.attempt}"] = result
                 self._spent_per_tier[tier] += result.cost_usd
                 self._spent_per_band[wi.band] = self._spent_per_band.get(wi.band, 0.0) + result.cost_usd
                 self._runs_per_band[wi.band] = self._runs_per_band.get(wi.band, 0) + 1
@@ -443,9 +486,14 @@ class HunterPool:
         tier: str,
         band: str = "",
         seed_transcript: str | None = None,
+        entry_point: Any = None,
+        seed_context: str | None = None,
     ) -> TargetResult:
         findings, cost, tokens, stop_reason = await self._run_one_hunter(
-            file_target, cost_limit, seed_transcript=seed_transcript,
+            file_target, cost_limit,
+            seed_transcript=seed_transcript,
+            entry_point=entry_point,
+            seed_context=seed_context,
         )
         return TargetResult(
             target=file_target.get("path", ""),
@@ -463,6 +511,8 @@ class HunterPool:
         file_target: FileTarget,
         cost_limit: float,
         seed_transcript: str | None = None,
+        entry_point: Any = None,
+        seed_context: str | None = None,
     ) -> tuple[list[Finding], float, int, str]:
         """Run a single hunter. Returns (findings, cost_usd, tokens_used, stop_reason)."""
         logger.info(
@@ -481,7 +531,10 @@ class HunterPool:
 
         try:
             hunter, ctx = self._build_hunter_for_file(
-                file_target, sandbox, budget_usd=cost_limit, seed_transcript=seed_transcript,
+                file_target, sandbox, budget_usd=cost_limit,
+                seed_transcript=seed_transcript,
+                entry_point=entry_point,
+                seed_context=seed_context,
             )
             run_result = await hunter.arun()
 
@@ -516,6 +569,8 @@ class HunterPool:
         sandbox: Any,
         budget_usd: float = 0.0,
         seed_transcript: str | None = None,
+        entry_point: Any = None,
+        seed_context: str | None = None,
     ) -> Any:
         """Either invoke the user-supplied hunter_factory or import build_hunter_agent."""
         session_id = f"{self.config.session_id_prefix}-{uuid.uuid4().hex[:8]}"
@@ -551,4 +606,6 @@ class HunterPool:
             exploit_mode=self.config.exploit_mode,
             budget_usd=budget_usd,
             seed_transcript=seed_transcript,
+            entry_point=entry_point,
+            seed_context=seed_context,
         )

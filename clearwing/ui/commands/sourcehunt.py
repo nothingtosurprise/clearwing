@@ -72,6 +72,36 @@ def add_parser(subparsers):
         help="Override redundancy count for high-ranked files (default: auto from priority)",
     )
     parser.add_argument(
+        "--shard-entry-points",
+        action="store_true",
+        default=False,
+        dest="shard_entry_points",
+        help="Shard agents by function-level entry point for high-ranked files "
+        "(auto-enabled at --depth deep)",
+    )
+    parser.add_argument(
+        "--min-shard-rank",
+        type=int,
+        default=4,
+        dest="min_shard_rank",
+        metavar="N",
+        help="Minimum file rank for entry-point sharding (default: 4)",
+    )
+    parser.add_argument(
+        "--seed-corpus",
+        default=None,
+        dest="seed_corpus",
+        metavar="PATH",
+        help="Path to a local seed corpus directory",
+    )
+    parser.add_argument(
+        "--seed-cves",
+        action="store_true",
+        default=False,
+        dest="seed_cves",
+        help="Auto-extract CVE history from git log as seed context",
+    )
+    parser.add_argument(
         "--budget",
         type=float,
         default=0.0,
@@ -477,6 +507,11 @@ def handle(cli, args):
         exploit_mode=args.exploit_mode,
         starting_band=args.starting_band,
         redundancy_override=args.redundancy,
+        shard_entry_points=True if args.shard_entry_points else None,
+        min_shard_rank=args.min_shard_rank,
+        seed_corpus_sources=(
+            (["git_cve"] if args.seed_cves else []) or None
+        ),
     )
 
     cli.console.print(

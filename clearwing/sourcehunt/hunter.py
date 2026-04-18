@@ -902,6 +902,8 @@ def _build_deep_agent_prompt(
     seeded_crash: dict | None,
     semgrep_hints: list[dict] | None,
     specialist: str = "general",
+    entry_point: Any = None,
+    seed_context: str | None = None,
 ) -> str:
     """Render the deep agent prompt for this file."""
     seeded_crash_block = ""
@@ -927,7 +929,7 @@ def _build_deep_agent_prompt(
     focus = _DEEP_SPECIALIST_FOCUS.get(specialist, "")
     specialist_focus = f"\n{focus}\n" if focus else ""
 
-    return DEEP_AGENT_PROMPT.format(
+    prompt = DEEP_AGENT_PROMPT.format(
         project_name=project_name,
         file_path=file_target.get("path", "unknown"),
         language=file_target.get("language", "unknown"),
@@ -937,6 +939,19 @@ def _build_deep_agent_prompt(
         specialist_focus=specialist_focus,
     )
 
+    if entry_point is not None:
+        prompt += "\n" + ENTRY_POINT_FOCUS.format(
+            entry_point=entry_point.function_name,
+            file_path=file_target.get("path", "unknown"),
+            start_line=entry_point.start_line,
+            end_line=entry_point.end_line,
+            entry_type=entry_point.entry_type,
+        )
+    if seed_context:
+        prompt += "\n" + SEED_CORPUS_BLOCK.format(seed_context=seed_context)
+
+    return prompt
+
 
 def _build_unconstrained_prompt(
     file_target: FileTarget,
@@ -945,6 +960,8 @@ def _build_unconstrained_prompt(
     semgrep_hints: list[dict] | None,
     campaign_hint: str | None = None,
     exploit_mode: bool = False,
+    entry_point: Any = None,
+    seed_context: str | None = None,
 ) -> str:
     """Build the unconstrained discovery prompt for any agent mode."""
     seed_parts: list[str] = []
@@ -979,6 +996,17 @@ def _build_unconstrained_prompt(
     if campaign_hint:
         prompt += "\n" + CAMPAIGN_HINT_TEMPLATE.format(objective=campaign_hint)
 
+    if entry_point is not None:
+        prompt += "\n" + ENTRY_POINT_FOCUS.format(
+            entry_point=entry_point.function_name,
+            file_path=file_target.get("path", "unknown"),
+            start_line=entry_point.start_line,
+            end_line=entry_point.end_line,
+            entry_type=entry_point.entry_type,
+        )
+    if seed_context:
+        prompt += "\n" + SEED_CORPUS_BLOCK.format(seed_context=seed_context)
+
     prompt += "\n" + SELF_CHECK
 
     return prompt
@@ -988,6 +1016,20 @@ SEED_TRANSCRIPT_BLOCK = """
 A previous investigation of this file found the following:
 {transcript}
 Continue from where this left off. Do not repeat analysis already done."""
+
+ENTRY_POINT_FOCUS = """
+Your starting point is the function `{entry_point}` in {file_path} \
+(lines {start_line}-{end_line}). This function is classified as a \
+{entry_type}. Start your investigation here, but follow the code wherever \
+it leads."""
+
+SEED_CORPUS_BLOCK = """
+Prior crash/CVE history for this code:
+{seed_context}
+
+This context is informational — these specific bugs are patched. But the \
+history suggests this code path has been fragile and may contain related \
+issues."""
 
 
 # --- Public factory ----------------------------------------------------------
@@ -1353,6 +1395,8 @@ def build_hunter_agent(
     campaign_hint: str | None = None,
     exploit_mode: bool = False,
     seed_transcript: str | None = None,
+    entry_point: Any = None,
+    seed_context: str | None = None,
 ) -> tuple[NativeHunter, HunterContext]:
     """Build a per-file native hunter runtime.
 
@@ -1420,6 +1464,8 @@ def build_hunter_agent(
             combined_hints,
             campaign_hint=campaign_hint,
             exploit_mode=exploit_mode,
+            entry_point=entry_point,
+            seed_context=seed_context,
         )
         if agent_mode == "deep":
             tools = build_deep_agent_tools(ctx)
@@ -1436,6 +1482,8 @@ def build_hunter_agent(
             seeded_crash,
             combined_hints,
             specialist=specialist,
+            entry_point=entry_point,
+            seed_context=seed_context,
         )
         max_steps = 500
     else:

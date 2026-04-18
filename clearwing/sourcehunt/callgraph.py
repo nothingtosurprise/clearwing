@@ -106,6 +106,15 @@ _FUNCTION_CALL_NODE_TYPES = {
 
 
 @dataclass
+class FunctionInfo:
+    """Per-function metadata extracted from tree-sitter AST."""
+
+    name: str
+    start_line: int  # 1-indexed
+    end_line: int  # 1-indexed, inclusive
+
+
+@dataclass
 class CallGraph:
     """Callgraph output.
 
@@ -113,11 +122,15 @@ class CallGraph:
     - `calls_out[file]` = set of function names called from that file
     - `defined_in[name]` = set of files that define a function of that name
       (multiple files can shadow the same name, especially in C/C++)
+    - `function_info[file]` = list of FunctionInfo with line ranges
     """
 
     functions: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
     calls_out: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
     defined_in: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
+    function_info: dict[str, list[FunctionInfo]] = field(
+        default_factory=lambda: defaultdict(list)
+    )
 
     def callers_of_file(self, target_file: str) -> set[str]:
         """Return the set of files that call any function defined in target_file."""
@@ -286,6 +299,11 @@ class CallGraphBuilder:
                 if name:
                     graph.functions[rel_path].add(name)
                     graph.defined_in[name].add(rel_path)
+                    graph.function_info[rel_path].append(FunctionInfo(
+                        name=name,
+                        start_line=node.start_point[0] + 1,
+                        end_line=node.end_point[0] + 1,
+                    ))
 
             elif node.type in call_types:
                 name = self._extract_call_name(node, lang_name, source)

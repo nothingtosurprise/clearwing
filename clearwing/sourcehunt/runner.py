@@ -138,6 +138,10 @@ class SourceHuntRunner:
         exploit_mode: bool = False,
         starting_band: str | None = None,  # "fast" | "standard" | "deep" | None (auto)
         redundancy_override: int | None = None,
+        shard_entry_points: bool | None = None,  # None = auto (deep depth)
+        min_shard_rank: int = 4,
+        min_project_loc: int = 50_000,
+        seed_corpus_sources: list[str] | None = None,
     ):
         self.repo_url = repo_url
         self.branch = branch
@@ -181,6 +185,10 @@ class SourceHuntRunner:
         self._exploit_mode = exploit_mode
         self._starting_band_override = starting_band
         self._redundancy_override = redundancy_override
+        self._shard_entry_points_override = shard_entry_points
+        self._min_shard_rank = min_shard_rank
+        self._min_project_loc = min_project_loc
+        self._seed_corpus_sources = seed_corpus_sources
 
     @property
     def _agent_mode(self) -> str:
@@ -201,6 +209,12 @@ class SourceHuntRunner:
         if self._starting_band_override:
             return self._starting_band_override
         return {"standard": "standard", "deep": "deep"}.get(self.depth, "standard")
+
+    @property
+    def _shard_entry_points(self) -> bool:
+        if self._shard_entry_points_override is not None:
+            return self._shard_entry_points_override
+        return self.depth == "deep"
 
     # --- Public API ---------------------------------------------------------
 
@@ -306,6 +320,40 @@ class SourceHuntRunner:
                         key = ft.get("path", "")
                         semgrep_hints_by_file.setdefault(key, []).extend(mechanism_hints)
 
+            # 2.7. Entry-point extraction (spec 004)
+            entry_points_by_file: dict = {}
+            if self._shard_entry_points and preprocess_result.callgraph is not None:
+                total_loc = sum(ft.get("loc", 0) for ft in files)
+                if total_loc >= self._min_project_loc:
+                    try:
+                        from .entry_points import extract_entry_points_batch
+
+                        entry_points_by_file = extract_entry_points_batch(
+                            file_targets=files,
+                            callgraph=preprocess_result.callgraph,
+                            repo_path=repo_path,
+                            min_rank=self._min_shard_rank,
+                        )
+                    except Exception:
+                        logger.warning("Entry-point extraction failed", exc_info=True)
+
+            # 2.8. Seed corpus ingestion (spec 004)
+            seed_corpus_by_file: dict = {}
+            if self._seed_corpus_sources:
+                try:
+                    from .seed_corpus import ingest_seed_corpus
+
+                    sc_result = ingest_seed_corpus(
+                        repo_path, files, self._seed_corpus_sources,
+                    )
+                    for entry in sc_result.entries:
+                        seed_corpus_by_file.setdefault(entry.file_path, []).append(entry)
+                    if sc_result.errors:
+                        for err in sc_result.errors:
+                            logger.warning("Seed corpus: %s", err)
+                except Exception:
+                    logger.warning("Seed corpus ingestion failed", exc_info=True)
+
             # 3. Tiered hunt
             hunter_llm = self._get_native_client("hunter", self.hunter_llm)
             all_findings: list[Finding] = []
@@ -333,6 +381,9 @@ class SourceHuntRunner:
                         starting_band=self._starting_band,
                         max_band=self._max_band,
                         redundancy_override=self._redundancy_override,
+                        entry_points_by_file=entry_points_by_file,
+                        seed_corpus_by_file=seed_corpus_by_file,
+                        shard_entry_points=self._shard_entry_points,
                     )
                 )
                 try:
