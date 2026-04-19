@@ -10,9 +10,13 @@ through `from_*` + `to_*` preserves every field present in the source shape.
 
 from __future__ import annotations
 
+import logging
 import uuid
+import warnings
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
+
+logger = logging.getLogger(__name__)
 
 Severity = Literal["critical", "high", "medium", "low", "info"]
 
@@ -27,6 +31,32 @@ EvidenceLevel = Literal[
     "exploit_demonstrated",
     "patch_validated",
 ]
+
+
+# --- Evidence ladder helpers --------------------------------------------------
+
+EVIDENCE_LEVELS: tuple[EvidenceLevel, ...] = (
+    "suspicion",
+    "static_corroboration",
+    "crash_reproduced",
+    "root_cause_explained",
+    "exploit_demonstrated",
+    "patch_validated",
+)
+
+_EVIDENCE_RANK: dict[str, int] = {level: idx for idx, level in enumerate(EVIDENCE_LEVELS)}
+
+
+def evidence_compare(a: EvidenceLevel, b: EvidenceLevel) -> int:
+    """Return -1, 0, or 1 like Python 2's cmp."""
+    ra = _EVIDENCE_RANK[a]
+    rb = _EVIDENCE_RANK[b]
+    return (ra > rb) - (ra < rb)
+
+
+def evidence_at_or_above(level: EvidenceLevel, threshold: EvidenceLevel) -> bool:
+    """True if `level` is at least as strong as `threshold`."""
+    return _EVIDENCE_RANK[level] >= _EVIDENCE_RANK[threshold]
 
 
 # --- The unified Finding ----------------------------------------------------
@@ -123,6 +153,22 @@ class Finding:
     # Extensible payload — v0.2/v0.3 seams, retro-hunt fields, etc.
     extra: dict[str, Any] = field(default_factory=dict)
 
+    # --- Post-init validation ------------------------------------------------
+
+    def __post_init__(self) -> None:
+        """Auto-generate id, coerce severity, validate evidence_level."""
+        if not self.id:
+            self.id = f"f-{uuid.uuid4().hex[:8]}"
+        self.severity = _coerce_severity(self.severity)
+        if self.evidence_level not in _EVIDENCE_RANK:
+            self.evidence_level = "suspicion"
+        if self.file is None and self.target is None and self.finding_type:
+            warnings.warn(
+                f"Finding {self.id!r} has finding_type={self.finding_type!r} "
+                "but neither file nor target is set",
+                stacklevel=2,
+            )
+
     # --- Derived properties -------------------------------------------------
 
     @property
@@ -197,6 +243,84 @@ class Finding:
                 return default
             return val
         return self.extra.get(key, default)
+
+    # --- Typed mutation methods ---------------------------------------------
+
+    def mark_verified(
+        self,
+        *,
+        is_real: bool = False,
+        severity_verified: Severity | None = None,
+        evidence_level: EvidenceLevel | None = None,
+        pro_argument: str | None = None,
+        counter_argument: str | None = None,
+        tie_breaker: str | None = None,
+        session_id: str | None = None,
+    ) -> None:
+        """Apply verifier results to this finding."""
+        self.verified = is_real
+        if severity_verified is not None:
+            self.severity_verified = severity_verified
+        if pro_argument is not None:
+            self.verifier_pro_argument = pro_argument
+        if counter_argument is not None:
+            self.verifier_counter_argument = counter_argument
+        if tie_breaker is not None:
+            self.verifier_tie_breaker = tie_breaker
+        if session_id is not None:
+            self.verifier_session_id = session_id
+        if evidence_level is not None:
+            self.bump_evidence(evidence_level)
+
+    def mark_exploited(
+        self,
+        *,
+        exploit: str | None = None,
+        success: bool | None = None,
+        cost_usd: float | None = None,
+        duration_seconds: float | None = None,
+        partial: bool | None = None,
+        primitive_type: str | None = None,
+    ) -> None:
+        """Apply exploiter results to this finding."""
+        if exploit is not None:
+            self.exploit = exploit
+        if success is not None:
+            self.exploit_success = success
+        if cost_usd is not None:
+            self.extra["exploit_cost_usd"] = cost_usd
+        if duration_seconds is not None:
+            self.extra["exploit_duration_seconds"] = duration_seconds
+        if partial is not None and partial:
+            self.extra["exploit_partial"] = True
+            if primitive_type is not None:
+                self.extra["exploit_primitive_type"] = primitive_type
+
+    def apply_patch_result(
+        self,
+        *,
+        diff: str | None = None,
+        validated: bool | None = None,
+        attempted: bool | None = None,
+    ) -> None:
+        """Apply auto-patcher results to this finding."""
+        self.auto_patch = diff if diff else None
+        if attempted is not None:
+            self.auto_patch_validated = validated if attempted else None
+        elif validated is not None:
+            self.auto_patch_validated = validated
+        if validated:
+            self.bump_evidence("patch_validated")
+
+    def bump_evidence(self, new_level: EvidenceLevel) -> None:
+        """Bump evidence_level only if *new_level* is strictly higher."""
+        current = self.evidence_level
+        if current not in _EVIDENCE_RANK:
+            current = "suspicion"
+        if new_level not in _EVIDENCE_RANK:
+            return
+        if _EVIDENCE_RANK[new_level] > _EVIDENCE_RANK[current]:
+            self.evidence_level = new_level
 
 
 # --- Converters: from legacy shapes → Finding ------------------------------

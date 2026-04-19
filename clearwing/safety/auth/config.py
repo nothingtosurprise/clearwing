@@ -16,7 +16,7 @@ class FormLogin:
 
     url: str
     username_field: str = "username"
-    password_field: str = "password"
+    password_field: str = "password"  # noqa: S105
     submit_selector: str = "button[type=submit]"
     username: str = ""
     password: str = ""

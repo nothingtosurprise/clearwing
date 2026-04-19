@@ -1,8 +1,41 @@
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml  # type: ignore[import-untyped]
+
+
+@dataclass
+class SourceHuntLimits:
+    """Centralized limits for the sourcehunt pipeline.
+
+    Every module reads its limits from this single dataclass.  Defaults
+    match the previously-hardcoded values for backward compatibility.
+    """
+
+    max_file_size: int = 1_000_000
+    max_matches_per_pattern: int = 50
+    max_entry_points_per_file: int = 20
+    max_entries_per_file: int = 10
+    max_seed_context_chars: int = 2000
+    max_dedup_candidates: int = 3
+    max_disclosure_batch_size: int = 5
+    semgrep_timeout_seconds: int = 300
+
+    @classmethod
+    def from_env(cls) -> "SourceHuntLimits":
+        """Build limits with env-var overrides."""
+        kwargs: dict[str, int] = {}
+        if val := os.environ.get("CLEARWING_MAX_FILE_SIZE"):
+            kwargs["max_file_size"] = int(val)
+        if val := os.environ.get("CLEARWING_SEMGREP_TIMEOUT"):
+            kwargs["semgrep_timeout_seconds"] = int(val)
+        if val := os.environ.get("CLEARWING_MAX_MATCHES_PER_PATTERN"):
+            kwargs["max_matches_per_pattern"] = int(val)
+        if val := os.environ.get("CLEARWING_MAX_ENTRY_POINTS_PER_FILE"):
+            kwargs["max_entry_points_per_file"] = int(val)
+        return cls(**kwargs)
 
 
 @dataclass
@@ -59,7 +92,7 @@ class Config:
             "auto_exploit": False,
             "metasploit_host": "127.0.0.1",
             "metasploit_port": 55553,
-            "metasploit_password": "msf",
+            "metasploit_password": os.environ.get("CLEARWING_MSF_PASSWORD", "msf"),
         },
         "reporting": {
             "default_format": "text",

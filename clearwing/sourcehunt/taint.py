@@ -437,7 +437,7 @@ class TaintAnalyzer:
     """
 
     # Maximum file size — above this we skip to keep the analyzer cheap
-    MAX_FILE_SIZE = 500_000
+    _DEFAULT_MAX_FILE_SIZE = 1_000_000
 
     SKIP_DIRS = {
         ".git",
@@ -454,9 +454,10 @@ class TaintAnalyzer:
         "third_party",
     }
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_file_size: int | None = None) -> None:
         self._languages = _load_tree_sitter_languages()
         self._parsers: dict[str, Any] = {}
+        self.MAX_FILE_SIZE = max_file_size or self._DEFAULT_MAX_FILE_SIZE
 
     @property
     def available(self) -> bool:

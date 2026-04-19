@@ -20,42 +20,18 @@ from typing import Any, Literal
 
 from typing_extensions import TypedDict
 
-from clearwing.findings.types import Finding
+from clearwing.findings.types import (
+    EVIDENCE_LEVELS,  # noqa: F401 — re-exported for backwards compatibility
+    EvidenceLevel,
+    Finding,
+    evidence_at_or_above,
+    evidence_compare,  # noqa: F401 — re-exported for backwards compatibility
+)
 from clearwing.llm import BaseMessage
 
 # --- Evidence ladder ---------------------------------------------------------
-
-EvidenceLevel = Literal[
-    "suspicion",
-    "static_corroboration",
-    "crash_reproduced",
-    "root_cause_explained",
-    "exploit_demonstrated",
-    "patch_validated",
-]
-
-EVIDENCE_LEVELS: tuple[EvidenceLevel, ...] = (
-    "suspicion",
-    "static_corroboration",
-    "crash_reproduced",
-    "root_cause_explained",
-    "exploit_demonstrated",
-    "patch_validated",
-)
-
-_EVIDENCE_RANK = {level: idx for idx, level in enumerate(EVIDENCE_LEVELS)}
-
-
-def evidence_compare(a: EvidenceLevel, b: EvidenceLevel) -> int:
-    """Return -1, 0, or 1 like Python 2's cmp."""
-    ra = _EVIDENCE_RANK[a]
-    rb = _EVIDENCE_RANK[b]
-    return (ra > rb) - (ra < rb)
-
-
-def evidence_at_or_above(level: EvidenceLevel, threshold: EvidenceLevel) -> bool:
-    """True if `level` is at least as strong as `threshold`."""
-    return _EVIDENCE_RANK[level] >= _EVIDENCE_RANK[threshold]
+# Canonical definitions now live in clearwing.findings.types.
+# Re-exported here for backwards compatibility.
 
 
 def filter_by_evidence(
@@ -239,6 +215,65 @@ class StabilityResult:
 
 
 # --- Disclosure lifecycle (spec 011) ------------------------------------------
+
+
+class StageOutcome(str, Enum):
+    SUCCEEDED = "succeeded"
+    DEGRADED = "degraded"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+@dataclass
+class StageStatus:
+    """Status of a single pipeline stage."""
+
+    name: str
+    outcome: StageOutcome
+    error: str | None = None
+    fallback_description: str | None = None
+
+
+@dataclass
+class PipelineStatus:
+    """Aggregated health status for the full pipeline run."""
+
+    stages: dict[str, StageStatus] = field(default_factory=dict)
+
+    def record(self, name: str, outcome: StageOutcome, **kwargs: Any) -> None:
+        self.stages[name] = StageStatus(name=name, outcome=outcome, **kwargs)
+
+    def record_degraded(
+        self, name: str, fallback: str, error: str = "",
+    ) -> None:
+        self.stages[name] = StageStatus(
+            name=name,
+            outcome=StageOutcome.DEGRADED,
+            error=error or None,
+            fallback_description=fallback,
+        )
+
+    def record_succeeded(self, name: str) -> None:
+        self.stages[name] = StageStatus(name=name, outcome=StageOutcome.SUCCEEDED)
+
+    @property
+    def any_degraded(self) -> bool:
+        return any(s.outcome == StageOutcome.DEGRADED for s in self.stages.values())
+
+    @property
+    def any_failed(self) -> bool:
+        return any(s.outcome == StageOutcome.FAILED for s in self.stages.values())
+
+    def summary_lines(self) -> list[str]:
+        lines: list[str] = []
+        for s in self.stages.values():
+            line = f"  {s.name}: {s.outcome.value}"
+            if s.fallback_description:
+                line += f" — {s.fallback_description}"
+            if s.error:
+                line += f" (error: {s.error})"
+            lines.append(line)
+        return lines
 
 
 class DisclosureState(str, Enum):

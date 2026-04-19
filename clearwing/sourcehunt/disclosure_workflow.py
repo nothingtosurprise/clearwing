@@ -26,8 +26,9 @@ _MAX_BATCH_SIZE = 5
 class DisclosureWorkflow:
     """Human-validation and coordinated-disclosure lifecycle."""
 
-    def __init__(self, db: DisclosureDB):
+    def __init__(self, db: DisclosureDB, *, max_batch_size: int = _MAX_BATCH_SIZE):
         self._db = db
+        self._max_batch_size = max_batch_size
 
     def format_review_context(self, finding_id: str) -> str:
         """Build human-readable review context for a finding."""
@@ -165,7 +166,7 @@ class DisclosureWorkflow:
             if f not in critical
         ]
 
-        return critical + non_critical[:_MAX_BATCH_SIZE]
+        return critical + non_critical[:self._max_batch_size]
 
     def send_disclosure(
         self,

@@ -46,6 +46,9 @@ def ingest_seed_corpus(
     repo_path: str,
     file_targets: list[FileTarget],
     sources: list[str] | None = None,
+    *,
+    max_entries_per_file: int = MAX_ENTRIES_PER_FILE,
+    max_context_chars: int = MAX_SEED_CONTEXT_CHARS,
 ) -> SeedCorpusResult:
     """Ingest seed corpus from available sources. Never blocks pipeline."""
     sources = sources or ["git_cve"]
@@ -55,7 +58,11 @@ def ingest_seed_corpus(
         try:
             if source == "git_cve":
                 file_paths = [ft.get("path", "") for ft in file_targets if ft.get("path")]
-                entries = _extract_git_cve_history(repo_path, file_paths)
+                entries = _extract_git_cve_history(
+                    repo_path, file_paths,
+                    max_entries_per_file=max_entries_per_file,
+                    max_context_chars=max_context_chars,
+                )
                 result.entries.extend(entries)
                 result.sources_queried.append("git_cve")
             elif source == "oss_fuzz":
@@ -74,6 +81,9 @@ def ingest_seed_corpus(
 def _extract_git_cve_history(
     repo_path: str,
     file_paths: list[str],
+    *,
+    max_entries_per_file: int = MAX_ENTRIES_PER_FILE,
+    max_context_chars: int = MAX_SEED_CONTEXT_CHARS,
 ) -> list[SeedCorpusEntry]:
     """Extract CVE mentions from git log for the given files.
 
@@ -124,7 +134,7 @@ def _extract_git_cve_history(
             file_path = line.strip()
             if file_path in set(file_paths):
                 count = counts_per_file.get(file_path, 0)
-                if count >= MAX_ENTRIES_PER_FILE:
+                if count >= max_entries_per_file:
                     continue
                 for cve_id in current_cves or [None]:
                     entries.append(SeedCorpusEntry(
@@ -136,14 +146,18 @@ def _extract_git_cve_history(
                         summary=current_message[:200],
                     ))
                     counts_per_file[file_path] = count + 1
-                    if counts_per_file[file_path] >= MAX_ENTRIES_PER_FILE:
+                    if counts_per_file[file_path] >= max_entries_per_file:
                         break
 
     logger.info("Git CVE extraction: %d entries from %d files", len(entries), len(counts_per_file))
     return entries
 
 
-def format_seed_context(entries: list[SeedCorpusEntry]) -> str:
+def format_seed_context(
+    entries: list[SeedCorpusEntry],
+    *,
+    max_context_chars: int = MAX_SEED_CONTEXT_CHARS,
+) -> str:
     """Format seed corpus entries into a prompt block."""
     if not entries:
         return ""
@@ -159,6 +173,6 @@ def format_seed_context(entries: list[SeedCorpusEntry]) -> str:
         parts.append(line)
 
     text = "\n".join(parts)
-    if len(text) > MAX_SEED_CONTEXT_CHARS:
-        text = text[:MAX_SEED_CONTEXT_CHARS] + "\n... (truncated)"
+    if len(text) > max_context_chars:
+        text = text[:max_context_chars] + "\n... (truncated)"
     return text

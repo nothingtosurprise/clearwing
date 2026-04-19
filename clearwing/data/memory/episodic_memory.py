@@ -47,6 +47,7 @@ class EpisodicMemory:
         self._db_path = Path(db_path).expanduser()
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self.session_id = session_id
+        self._local = threading.local()
         self._init_db()
 
     # ------------------------------------------------------------------
@@ -54,10 +55,27 @@ class EpisodicMemory:
     # ------------------------------------------------------------------
 
     def _get_connection(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            return conn
         conn = sqlite3.connect(str(self._db_path), timeout=10)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=5000")
+        self._local.conn = conn
         return conn
+
+    def close(self) -> None:
+        """Close the thread-local connection, if any."""
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._local.conn = None
+
+    def __del__(self) -> None:
+        self.close()
 
     def _init_db(self) -> None:
         with self._lock, self._get_connection() as conn:
@@ -151,6 +169,50 @@ class EpisodicMemory:
             content=content,
             metadata=metadata or {},
         )
+
+    def record_batch(
+        self,
+        events: list[dict],
+    ) -> list[Episode]:
+        """Insert multiple episodes in a single transaction.
+
+        Each dict must have keys: target, event_type, content.
+        Optional: metadata (dict), session_id (str).
+        """
+        if not events:
+            return []
+        ts = datetime.now(tz=timezone.utc).isoformat()
+        rows = []
+        for evt in events:
+            sid = evt.get("session_id") or self.session_id
+            meta = evt.get("metadata")
+            meta_json = json.dumps(meta) if meta else "{}"
+            rows.append((evt["target"], sid, ts, evt["event_type"], evt["content"], meta_json))
+
+        episodes: list[Episode] = []
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.executemany(
+                """
+                INSERT INTO episodes (target, session_id, timestamp, event_type, content, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            conn.commit()
+            last_id = cursor.lastrowid or 0
+            first_id = last_id - len(rows) + 1
+            for i, (target, sid, _ts, etype, content, meta_json) in enumerate(rows):
+                episodes.append(Episode(
+                    id=first_id + i,
+                    target=target,
+                    session_id=sid,
+                    timestamp=ts,
+                    event_type=etype,
+                    content=content,
+                    metadata=json.loads(meta_json),
+                ))
+        return episodes
 
     def recall(self, target: str, limit: int = 50) -> list[Episode]:
         """Return the most recent episodes for *target*."""

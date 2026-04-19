@@ -260,8 +260,8 @@ class HunterSandbox:
                 logger.warning("git init in writable workspace failed", exc_info=True)
 
         # Stash scratch host dir + variant on the container for cleanup / introspection
-        sb._scratch_host_dir = scratch_host_dir  # type: ignore[attr-defined]
-        sb._variant = chosen  # type: ignore[attr-defined]
+        sb.scratch_host_dir = scratch_host_dir
+        sb.variant = chosen
         self._spawned.append(sb)
         return sb
 
@@ -280,7 +280,7 @@ class HunterSandbox:
                 sb.stop()
             except Exception:
                 logger.debug("HunterSandbox cleanup container failed", exc_info=True)
-            scratch = getattr(sb, "_scratch_host_dir", None)
+            scratch = sb.scratch_host_dir
             if scratch:
                 try:
                     shutil.rmtree(scratch, ignore_errors=True)

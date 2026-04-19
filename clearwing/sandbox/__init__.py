@@ -9,8 +9,10 @@ limits, and sanitizer-instrumented build images.
 from .builders import BuildRecipe, BuildSystemDetector
 from .container import ExecResult, SandboxConfig, SandboxContainer
 from .hunter_sandbox import HunterSandbox
+from .registry import ContainerRegistry
 
 __all__ = [
+    "ContainerRegistry",
     "ExecResult",
     "SandboxConfig",
     "SandboxContainer",

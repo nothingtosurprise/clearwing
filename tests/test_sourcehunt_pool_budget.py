@@ -6,6 +6,7 @@ so we can exercise the budget math without any LLM or sandbox calls.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from unittest.mock import MagicMock
 
 import pytest
@@ -43,6 +44,14 @@ def _ft(path: str, surface: int, influence: int) -> dict:
     }
 
 
+@dataclass
+class _StubRunResult:
+    findings: list
+    cost_usd: float
+    tokens_used: int
+    stop_reason: str
+
+
 def _stub_hunter_factory(per_call_cost: float, finding_per_file: bool = True):
     """Return a hunter_factory that fakes a native hunter + ctx with a fixed cost."""
 
@@ -67,7 +76,12 @@ def _stub_hunter_factory(per_call_cost: float, finding_per_file: bool = True):
 
         class _StubHunter:
             async def arun(self):
-                return list(ctx.findings), per_call_cost, 0
+                return _StubRunResult(
+                    findings=list(ctx.findings),
+                    cost_usd=per_call_cost,
+                    tokens_used=0,
+                    stop_reason="completed",
+                )
 
         return _StubHunter(), ctx
 
@@ -86,6 +100,9 @@ def _make_pool(files, budget=10.0, tier_split=(0.7, 0.25, 0.05), per_call_cost=0
         cost_limit_per_file_a=10.0,  # disable per-file caps for these tests
         cost_limit_per_file_b=10.0,
         cost_limit_per_file_c=10.0,
+        starting_band="deep",
+        max_band="deep",
+        redundancy_override=1,
     )
     return HunterPool(config)
 
@@ -138,6 +155,9 @@ class TestUnlimitedBudget:
             sandbox_factory=None,
             hunter_factory=_stub_hunter_factory(1.0),
             max_parallel=1,
+            starting_band="deep",
+            max_band="deep",
+            redundancy_override=1,
         )
         pool = HunterPool(config)
 

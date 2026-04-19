@@ -229,6 +229,7 @@ class HunterPool:
         self._spent_per_band: dict[str, float] = {"fast": 0.0, "standard": 0.0, "deep": 0.0}
         self._runs_per_band: dict[str, int] = {"fast": 0, "standard": 0, "deep": 0}
         self._promotion_counts: dict[str, int] = {"fast→standard": 0, "standard→deep": 0}
+        self._state_lock = asyncio.Lock()
         self._cancelled = False
 
     def run(self) -> list[Finding]:
@@ -419,13 +420,14 @@ class HunterPool:
                 for task, wi in list(in_flight.items()):
                     task.cancel()
                     key = wi.file_target.get("path", "")
-                    self._results[key] = TargetResult(
-                        target=key,
-                        status="timeout",
-                        error=f"Hunter did not complete within {timeout}s",
-                        tier=tier,
-                        band=wi.band,
-                    )
+                    async with self._state_lock:
+                        self._results[key] = TargetResult(
+                            target=key,
+                            status="timeout",
+                            error=f"Hunter did not complete within {timeout}s",
+                            tier=tier,
+                            band=wi.band,
+                        )
                 return spent
 
             for task in done:
@@ -450,11 +452,12 @@ class HunterPool:
                         band=wi.band,
                     )
                 ep_suffix = f":{wi.entry_point.function_name}" if wi.entry_point else ""
-                self._results[f"{key}{ep_suffix}:{wi.band}:{wi.attempt}"] = result
-                self._spent_per_tier[tier] += result.cost_usd
-                self._spent_per_band[wi.band] = self._spent_per_band.get(wi.band, 0.0) + result.cost_usd
-                self._runs_per_band[wi.band] = self._runs_per_band.get(wi.band, 0) + 1
-                spent += result.cost_usd
+                async with self._state_lock:
+                    self._results[f"{key}{ep_suffix}:{wi.band}:{wi.attempt}"] = result
+                    self._spent_per_tier[tier] += result.cost_usd
+                    self._spent_per_band[wi.band] = self._spent_per_band.get(wi.band, 0.0) + result.cost_usd
+                    self._runs_per_band[wi.band] = self._runs_per_band.get(wi.band, 0) + 1
+                    spent += result.cost_usd
 
                 if result.status == "completed" and self.config.findings_pool is not None:
                     for f in cast(list[Finding], result.findings):
@@ -472,7 +475,8 @@ class HunterPool:
                     )
                     if next_band:
                         promo_key = f"{wi.band}→{next_band}"
-                        self._promotion_counts[promo_key] = self._promotion_counts.get(promo_key, 0) + 1
+                        async with self._state_lock:
+                            self._promotion_counts[promo_key] = self._promotion_counts.get(promo_key, 0) + 1
                         logger.info(
                             "Promoting %s from %s to %s band",
                             key, wi.band, next_band,

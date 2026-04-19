@@ -11,20 +11,26 @@ move to it incrementally.
 """
 
 from .types import (
+    EVIDENCE_LEVELS,
     SEVERITY_VALUES,
     EvidenceLevel,
     Finding,
     Severity,
+    evidence_at_or_above,
+    evidence_compare,
     from_analysis_finding,
     from_cicd_dict,
     to_cicd_dict,
 )
 
 __all__ = [
+    "EVIDENCE_LEVELS",
+    "EvidenceLevel",
     "Finding",
     "Severity",
-    "EvidenceLevel",
     "SEVERITY_VALUES",
+    "evidence_at_or_above",
+    "evidence_compare",
     "from_cicd_dict",
     "from_analysis_finding",
     "to_cicd_dict",

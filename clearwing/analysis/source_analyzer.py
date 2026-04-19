@@ -488,11 +488,13 @@ class SourceAnalyzer:
         ".pytest_cache",
     }
     SKIP_FILES = {".min.js", ".min.css", ".map", ".lock"}
-    MAX_FILE_SIZE = 1_000_000  # 1MB
+    MAX_FILE_SIZE = 1_000_000  # 1MB — class default; overridable per-instance
 
-    def __init__(self, repo_path: str | None = None):
+    def __init__(self, repo_path: str | None = None, *, max_file_size: int | None = None):
         self.repo_path = repo_path
         self._temp_dir: tempfile.TemporaryDirectory | None = None
+        if max_file_size is not None:
+            self.MAX_FILE_SIZE = max_file_size
 
     def clone(self, git_url: str, branch: str = "main") -> str:
         """Clone a git repository to a temporary directory.

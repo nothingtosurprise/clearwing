@@ -123,17 +123,43 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-# Present but not gated in CI until Phase 4. The select set is deliberately
-# conservative — pycodestyle errors, pyflakes, import order, pyupgrade, bugbear.
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I", "UP", "B", "S", "C90"]
 ignore = [
-    "E501",  # line-too-long — deferred; many tool docstrings exceed 100
-    "B008",  # function calls in default args
+    "E501",   # line-too-long — deferred; many tool docstrings exceed 100
+    "B008",   # function calls in default args
+    "S101",   # assert — used in test-like code and invariant checks
+    "S104",   # binding to all interfaces — intentional for proxy/callback servers
+    "S108",   # insecure temp file usage — legitimate in sandbox/tool contexts
+    "S110",   # try-except-pass — intentional in cleanup/teardown paths
+    "S112",   # try-except-continue — intentional in error-tolerant loops
+    "S310",   # audit URL open — security tool makes intentional URL requests
+    "S311",   # random not for crypto — used for jitter/obfuscation variable names
+    "S324",   # insecure hash — used for non-security purposes (checksums, dedup)
+    "S603",   # subprocess without shell=True — core tool functionality
+    "S607",   # partial executable path — intentional use of system tools
 ]
 
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
 [tool.ruff.lint.per-file-ignores]
-# Tests legitimately import after pytest.importorskip() / sys.path munging.
-"tests/**" = ["B", "E402", "E501"]
+"tests/**" = ["B", "E402", "E501", "S"]
+"clearwing/sourcehunt/runner.py" = ["C901"]
+"clearwing/ui/commands/sourcehunt.py" = ["C901"]
+"clearwing/ui/commands/interactive.py" = ["C901"]
+"clearwing/ui/web/app.py" = ["C901"]
+"clearwing/agent/runtime.py" = ["C901"]
+"clearwing/agent/tools/hunt/analysis.py" = ["C901"]
+"clearwing/agent/tools/hunt/discovery.py" = ["C901"]
+"clearwing/sourcehunt/pool.py" = ["C901"]
+"clearwing/sourcehunt/hunter.py" = ["C901"]
+"clearwing/sourcehunt/preprocessor.py" = ["C901"]
+"clearwing/sourcehunt/reporter.py" = ["C901"]
+"clearwing/sourcehunt/campaign.py" = ["C901"]
+"clearwing/llm/native.py" = ["C901"]
+"clearwing/runners/parallel/executor.py" = ["C901"]
+"clearwing/safety/audit/metrics.py" = ["C901"]
+"clearwing/analysis/taint_tracker.py" = ["C901"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -164,6 +190,9 @@ module = [
     "clearwing.sourcehunt.*",
     "clearwing.agent.tools.*",
     "clearwing.core.*",
+    "clearwing.agent.runtime",
+    "clearwing.agent.protocols",
+    "clearwing.providers.manager",
 ]
 disallow_untyped_defs = true
 warn_unused_ignores = true

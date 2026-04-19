@@ -374,10 +374,14 @@ def test_cross_campaign(tmp_path):
 
 
 def test_findings_without_id_skipped(tmp_path):
+    # __post_init__ now auto-generates an id when id="" is passed, so a
+    # Finding constructed with id="" will have an auto-generated id and be
+    # ingested successfully.
     db = HistoricalFindingsDB(path=tmp_path / "test.db")
     f = _make_finding(id="")
+    assert f.id.startswith("f-")  # auto-generated
     count = db.ingest_campaign([f], "https://github.com/test/repo", "session-1")
-    assert count == 0
+    assert count == 1
     db.close()
 
 

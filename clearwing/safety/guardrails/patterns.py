@@ -114,6 +114,8 @@ DANGEROUS_COMMAND_PATTERNS: list[re.Pattern] = [
     re.compile(r"rm\s+-[a-z]*r[a-z]*f[a-z]*\s+~", re.IGNORECASE),
     re.compile(r"rm\s+-[a-z]*f[a-z]*r[a-z]*\s+~", re.IGNORECASE),
     re.compile(r"rm\s+-[a-z]*r[a-z]*f[a-z]*\s+/\*", re.IGNORECASE),
+    re.compile(r"rm\s+-[a-z]*r[a-z]*f[a-z]*\s+/\S+", re.IGNORECASE),  # rm -rf /any/path
+    re.compile(r"rm\s+-[a-z]*f[a-z]*r[a-z]*\s+/\S+", re.IGNORECASE),  # rm -fr /any/path
     re.compile(r"\bmkfs\b", re.IGNORECASE),
     re.compile(r"dd\s+if=/dev/(zero|random|urandom)", re.IGNORECASE),
     re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:", re.IGNORECASE),  # fork bomb
@@ -133,6 +135,25 @@ DANGEROUS_COMMAND_PATTERNS: list[re.Pattern] = [
     re.compile(r"fork\s*\(\s*\)\s*while", re.IGNORECASE),
     re.compile(r"yes\s*\|", re.IGNORECASE),
     re.compile(r"/dev/zero.*>\s*/dev/sd", re.IGNORECASE),
+    # ---- Path traversal ----
+    re.compile(r"\.\./\.\./\.\./(?:etc|proc|sys|root|home)/", re.IGNORECASE),
+    re.compile(r"%2e%2e/", re.IGNORECASE),
+    # ---- Env var injection ----
+    re.compile(
+        r"export\s+(?:AWS_ACCESS_KEY|AWS_SECRET|GITHUB_TOKEN|DATABASE_URL)=", re.IGNORECASE
+    ),
+    # ---- Secrets exfiltration ----
+    re.compile(r"(?:curl|wget|nc)\s+.*\$(?:AWS_|GITHUB_TOKEN)", re.IGNORECASE),
+    re.compile(r"env\s*\|\s*curl", re.IGNORECASE),
+    re.compile(r"printenv\s*\|\s*nc", re.IGNORECASE),
+    # ---- Cloud CLI exfiltration ----
+    re.compile(r"aws\s+s3\s+(?:cp|sync)\b", re.IGNORECASE),
+    re.compile(r"gsutil\s+(?:cp|rsync)\b", re.IGNORECASE),
+    re.compile(r"az\s+storage\s+blob\s+upload\b", re.IGNORECASE),
+    # ---- Kernel module loading ----
+    re.compile(r"\binsmod\b", re.IGNORECASE),
+    re.compile(r"\bmodprobe\b", re.IGNORECASE),
+    re.compile(r"\brmmod\b", re.IGNORECASE),
     # ---- Suspicious chains ----
     re.compile(r"(echo|printf)\s+.*\|\s*base64\s+-[a-z]*d[a-z]*\s*\|\s*(bash|sh)", re.IGNORECASE),
     re.compile(r"base64\s+-[a-z]*d[a-z]*\s*\|\s*(bash|sh)", re.IGNORECASE),

@@ -172,8 +172,17 @@ class VariantSearcher:
         ".pytest_cache",
         "target",
     }
-    MAX_FILE_SIZE = 1_000_000
-    MAX_MATCHES_PER_PATTERN = 50
+    _DEFAULT_MAX_FILE_SIZE = 1_000_000
+    _DEFAULT_MAX_MATCHES = 50
+
+    def __init__(
+        self,
+        *,
+        max_file_size: int | None = None,
+        max_matches_per_pattern: int | None = None,
+    ) -> None:
+        self.MAX_FILE_SIZE = max_file_size or self._DEFAULT_MAX_FILE_SIZE
+        self.MAX_MATCHES_PER_PATTERN = max_matches_per_pattern or self._DEFAULT_MAX_MATCHES
 
     def search(
         self,

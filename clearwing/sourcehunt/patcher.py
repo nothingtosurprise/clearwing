@@ -26,7 +26,7 @@ from typing import Any, cast
 
 from clearwing.llm import AsyncLLMClient
 
-from .state import EVIDENCE_LEVELS, EvidenceLevel, Finding, evidence_at_or_above
+from .state import EvidenceLevel, Finding, evidence_at_or_above
 
 logger = logging.getLogger(__name__)
 
@@ -224,15 +224,27 @@ def apply_patch_attempt(
 ) -> Finding:
     """Merge a PatchAttempt into a Finding.
 
-    Only validated patches bump the evidence level — unvalidated ones are
-    recorded but do NOT raise confidence in the finding.
+    Delegates to ``finding.apply_patch_result()`` for the actual mutation
+    when *finding* is a Finding dataclass. Falls back to dict-style
+    assignment for plain-dict callers. Only validated patches bump the
+    evidence level.
     """
-    finding["auto_patch"] = attempt.diff if attempt.diff else None
-    finding["auto_patch_validated"] = attempt.validated if attempt.attempted else None
+    if isinstance(finding, Finding):
+        finding.apply_patch_result(
+            diff=attempt.diff,
+            validated=attempt.validated,
+            attempted=attempt.attempted,
+        )
+    else:
+        # Legacy dict path
+        finding["auto_patch"] = attempt.diff if attempt.diff else None  # type: ignore[index]
+        finding["auto_patch_validated"] = (  # type: ignore[index]
+            attempt.validated if attempt.attempted else None
+        )
+        if attempt.validated:
+            from clearwing.findings.types import EVIDENCE_LEVELS as _EL
 
-    if attempt.validated:
-        # Bump evidence_level to patch_validated (the gold standard)
-        current = finding.get("evidence_level", "suspicion")
-        if EVIDENCE_LEVELS.index("patch_validated") > EVIDENCE_LEVELS.index(current):
-            finding["evidence_level"] = "patch_validated"
+            current = finding.get("evidence_level", "suspicion")  # type: ignore[union-attr]
+            if _EL.index("patch_validated") > _EL.index(current):
+                finding["evidence_level"] = "patch_validated"  # type: ignore[index]
     return finding

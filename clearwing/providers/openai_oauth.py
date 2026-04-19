@@ -37,7 +37,7 @@ except ImportError:  # pragma: no cover - non-Unix fallback
 
 OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 OPENAI_CODEX_AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize"
-OPENAI_CODEX_TOKEN_URL = "https://auth.openai.com/oauth/token"
+OPENAI_CODEX_TOKEN_URL = "https://auth.openai.com/oauth/token"  # noqa: S105
 OPENAI_CODEX_REDIRECT_URI = "http://localhost:1455/auth/callback"
 OPENAI_CODEX_CALLBACK_PORT = 1455
 OPENAI_CODEX_CALLBACK_PATH = "/auth/callback"

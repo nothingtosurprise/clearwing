@@ -14,6 +14,14 @@ Public entry points: SourceHuntRunner (programmatic), `clearwing sourcehunt`
 
 from clearwing.findings.types import Finding
 
+from .config import (
+    BudgetConfig,
+    FeatureFlags,
+    HuntTuning,
+    OutputConfig,
+    SourceHuntConfig,
+    TargetConfig,
+)
 from .state import (
     EVIDENCE_LEVELS,
     EvidenceLevel,
@@ -26,11 +34,17 @@ from .state import (
 )
 
 __all__ = [
+    "BudgetConfig",
     "EvidenceLevel",
+    "FeatureFlags",
     "FileTag",
     "FileTarget",
     "Finding",
+    "HuntTuning",
+    "OutputConfig",
+    "SourceHuntConfig",
     "SourceHuntState",
+    "TargetConfig",
     "EVIDENCE_LEVELS",
     "evidence_at_or_above",
     "evidence_compare",

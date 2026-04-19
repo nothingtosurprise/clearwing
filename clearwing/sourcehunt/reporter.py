@@ -13,7 +13,7 @@ from typing import Any
 
 from clearwing.runners.cicd.sarif import SARIFGenerator
 
-from .state import EVIDENCE_LEVELS, Finding
+from .state import EVIDENCE_LEVELS, Finding, PipelineStatus
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ def write_sourcehunt_report(
     band_stats: dict | None = None,
     pool_stats: dict | None = None,
     subsystem_stats: dict | None = None,
+    pipeline_status: PipelineStatus | None = None,
 ) -> dict[str, str]:
     """Write the requested formats. Returns {format: filesystem_path}."""
     formats = formats or ["sarif", "markdown", "json"]
@@ -65,6 +66,7 @@ def write_sourcehunt_report(
             band_stats=band_stats,
             pool_stats=pool_stats,
             subsystem_stats=subsystem_stats,
+            pipeline_status=pipeline_status,
         )
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(md)
@@ -85,6 +87,15 @@ def write_sourcehunt_report(
             json_data["pool_stats"] = pool_stats
         if subsystem_stats:
             json_data["subsystem_stats"] = subsystem_stats
+        if pipeline_status and pipeline_status.stages:
+            json_data["pipeline_status"] = {
+                name: {
+                    "outcome": s.outcome.value,
+                    "error": s.error,
+                    "fallback": s.fallback_description,
+                }
+                for name, s in pipeline_status.stages.items()
+            }
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(json_data, f, indent=2, default=_json_default)
         paths["json"] = str(json_path)
@@ -163,6 +174,7 @@ def _render_markdown(
     band_stats: dict | None = None,
     pool_stats: dict | None = None,
     subsystem_stats: dict | None = None,
+    pipeline_status: PipelineStatus | None = None,
 ) -> str:
     lines = []
     lines.append(f"# Sourcehunt Report — {session_id}")
@@ -215,6 +227,12 @@ def _render_markdown(
         lines.append(
             f"- **Subsystem spend:** ${subsystem_stats.get('subsystem_spent_usd', 0):.2f}"
         )
+        lines.append("")
+
+    if pipeline_status and pipeline_status.stages:
+        lines.append("## Pipeline Health")
+        for status_line in pipeline_status.summary_lines():
+            lines.append(status_line)
         lines.append("")
 
     # Severity histogram

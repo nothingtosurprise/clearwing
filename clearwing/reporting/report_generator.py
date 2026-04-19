@@ -16,7 +16,7 @@ class ReportGenerator:
             "markdown": self._generate_markdown,
         }
         template_dir = Path(__file__).parent / "templates"
-        self.jinja_env = Environment(loader=FileSystemLoader(str(template_dir)))
+        self.jinja_env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=True)  # noqa: S701
 
     def generate_attack_graph(self, graph_data: dict) -> str:
         """

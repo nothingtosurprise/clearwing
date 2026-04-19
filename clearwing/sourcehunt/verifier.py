@@ -462,33 +462,47 @@ def apply_verifier_result(
 ) -> Finding:
     """Merge a VerifierResult into a Finding (in-place + return).
 
-    Accepts either a Finding dataclass or a plain dict — dict subscripting
-    works on both via the Finding compat shim.
+    Delegates to ``finding.mark_verified()`` and ``finding.bump_evidence()``
+    for the actual mutation when *finding* is a Finding dataclass. Falls back
+    to dict-style assignment for plain-dict callers (legacy tests / callers).
     """
-    finding["verified"] = result.is_real
-    finding["severity_verified"] = result.severity_verified
-    finding["verifier_pro_argument"] = result.pro_argument
-    finding["verifier_counter_argument"] = result.counter_argument
-    finding["verifier_tie_breaker"] = result.tie_breaker
-    finding["verifier_session_id"] = session_id
-    # Bump evidence_level if the verifier confirms a stronger one
-    current = finding.get("evidence_level", "suspicion")
-    if current not in EVIDENCE_LEVELS:
-        current = "suspicion"
-    new = result.evidence_level
-    if new not in EVIDENCE_LEVELS:
-        new = "suspicion"
-    if EVIDENCE_LEVELS.index(new) > EVIDENCE_LEVELS.index(current):
-        finding["evidence_level"] = new
-    # v0.3: patch-oracle outcome
-    if result.patch_oracle_attempted:
-        finding["patch_oracle_passed"] = result.patch_oracle_passed
-        # A passed oracle bumps evidence to root_cause_explained (causally
-        # validated — the fix actually killed the crash).
-        if result.patch_oracle_passed:
-            level = finding.get("evidence_level", "suspicion")
-            if level not in EVIDENCE_LEVELS:
-                level = "suspicion"
-            if EVIDENCE_LEVELS.index("root_cause_explained") > EVIDENCE_LEVELS.index(level):
-                finding["evidence_level"] = "root_cause_explained"
+    if isinstance(finding, Finding):
+        finding.mark_verified(
+            is_real=result.is_real,
+            severity_verified=result.severity_verified,
+            evidence_level=result.evidence_level,
+            pro_argument=result.pro_argument,
+            counter_argument=result.counter_argument,
+            tie_breaker=result.tie_breaker,
+            session_id=session_id,
+        )
+        # v0.3: patch-oracle outcome
+        if result.patch_oracle_attempted:
+            finding["patch_oracle_passed"] = result.patch_oracle_passed
+            if result.patch_oracle_passed:
+                finding.bump_evidence("root_cause_explained")
+    else:
+        # Legacy dict path
+        finding["verified"] = result.is_real  # type: ignore[index]
+        finding["severity_verified"] = result.severity_verified  # type: ignore[index]
+        finding["verifier_pro_argument"] = result.pro_argument  # type: ignore[index]
+        finding["verifier_counter_argument"] = result.counter_argument  # type: ignore[index]
+        finding["verifier_tie_breaker"] = result.tie_breaker  # type: ignore[index]
+        finding["verifier_session_id"] = session_id  # type: ignore[index]
+        current = finding.get("evidence_level", "suspicion")  # type: ignore[union-attr]
+        if current not in EVIDENCE_LEVELS:
+            current = "suspicion"
+        new = result.evidence_level
+        if new not in EVIDENCE_LEVELS:
+            new = "suspicion"
+        if EVIDENCE_LEVELS.index(new) > EVIDENCE_LEVELS.index(current):
+            finding["evidence_level"] = new  # type: ignore[index]
+        if result.patch_oracle_attempted:
+            finding["patch_oracle_passed"] = result.patch_oracle_passed  # type: ignore[index]
+            if result.patch_oracle_passed:
+                level = finding.get("evidence_level", "suspicion")  # type: ignore[union-attr]
+                if level not in EVIDENCE_LEVELS:
+                    level = "suspicion"
+                if EVIDENCE_LEVELS.index("root_cause_explained") > EVIDENCE_LEVELS.index(level):
+                    finding["evidence_level"] = "root_cause_explained"  # type: ignore[index]
     return finding

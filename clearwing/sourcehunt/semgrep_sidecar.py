@@ -49,10 +49,12 @@ class SemgrepSidecar:
         config: str = DEFAULT_SEMGREP_CONFIG,
         extra_args: list[str] | None = None,
         binary: str = "semgrep",
+        timeout_seconds: int | None = None,
     ):
         self.config = config
         self.extra_args = extra_args or []
         self.binary = binary
+        self.timeout_seconds = timeout_seconds or SEMGREP_TIMEOUT_SECONDS
 
     @property
     def available(self) -> bool:
@@ -89,11 +91,11 @@ class SemgrepSidecar:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=SEMGREP_TIMEOUT_SECONDS,
+                timeout=self.timeout_seconds,
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            logger.warning("Semgrep scan timed out after %ds", SEMGREP_TIMEOUT_SECONDS)
+            logger.warning("Semgrep scan timed out after %ds", self.timeout_seconds)
             return []
         except FileNotFoundError:
             return []

@@ -371,6 +371,11 @@ class TestAdversarialVerifierDefault:
             hunter_llm=_make_hunter_llm(),
             verifier_llm=verifier_llm,
             no_exploit=True,
+            # Use v1 verifier which has the STEEL-MAN adversarial prompt
+            validator_mode="v1",
+            # Disable the evidence-level gate so the adversarial prompt is
+            # used on every finding regardless of evidence_level
+            adversarial_threshold=None,
             # Disable v0.3 features that re-use the verifier LLM so this
             # test only sees the verification call
             enable_mechanism_memory=False,

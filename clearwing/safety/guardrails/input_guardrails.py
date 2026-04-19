@@ -12,6 +12,9 @@ from .patterns import (
 # Regex to find plausible base64-encoded strings (length > 20)
 _BASE64_RE = re.compile(r"[A-Za-z0-9+/]{20,}={0,2}")
 
+# Maximum depth for recursive base64 decoding to prevent infinite recursion
+MAX_BASE64_DEPTH = 2
+
 
 class InputGuardrail:
     """Check user-supplied text for prompt injection attempts."""
@@ -57,8 +60,15 @@ class InputGuardrail:
         return GuardrailResult(passed=True)
 
     @staticmethod
-    def _check_base64(text: str) -> GuardrailResult:
-        """Find base64-encoded strings, decode them, then re-check."""
+    def _check_base64(text: str, depth: int = 0) -> GuardrailResult:
+        """Find base64-encoded strings, decode them, then re-check.
+
+        Recursively decodes up to ``MAX_BASE64_DEPTH`` layers to catch
+        nested base64 payloads (e.g. base64(base64(injection))).
+        """
+        if depth >= MAX_BASE64_DEPTH:
+            return GuardrailResult(passed=True)
+
         for b64_match in _BASE64_RE.finditer(text):
             candidate = b64_match.group()
             try:
@@ -80,5 +90,12 @@ class InputGuardrail:
                         ),
                         severity="critical",
                     )
+
+            # Recursively check for nested base64 payloads
+            nested_result = InputGuardrail._check_base64(
+                decoded_normalized, depth=depth + 1
+            )
+            if not nested_result.passed:
+                return nested_result
 
         return GuardrailResult(passed=True)

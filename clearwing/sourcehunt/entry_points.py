@@ -58,6 +58,8 @@ def extract_entry_points(
     file_target: FileTarget,
     callgraph: CallGraph,
     repo_path: str,
+    *,
+    max_per_file: int = MAX_ENTRY_POINTS_PER_FILE,
 ) -> list[EntryPoint]:
     """Extract entry points from a single file using callgraph + naming heuristics."""
     file_path = file_target.get("path", "")
@@ -83,12 +85,12 @@ def extract_entry_points(
             description=desc,
         ))
 
-    if len(entry_points) > MAX_ENTRY_POINTS_PER_FILE:
+    if len(entry_points) > max_per_file:
         entry_points.sort(key=lambda ep: (
             _TYPE_PRIORITY.get(ep.entry_type, 99),
             -(ep.end_line - ep.start_line),
         ))
-        entry_points = entry_points[:MAX_ENTRY_POINTS_PER_FILE]
+        entry_points = entry_points[:max_per_file]
 
     return entry_points
 

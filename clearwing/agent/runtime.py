@@ -5,9 +5,8 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypedDict
 
 import networkx as nx
 
@@ -20,6 +19,7 @@ from clearwing.observability.telemetry import CostTracker
 from clearwing.safety.audit import AuditLogger
 from clearwing.safety.guardrails import InputGuardrail, OutputGuardrail
 
+from .protocols import KnowledgeGraphPopulator, LLMInvokable, StateUpdater, SystemPromptFactory
 from .tooling import AgentTool, InterruptRequest, tool_execution_context
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,14 @@ def _parse_tool_output(content: str) -> Any:
             return content
 
 
+class ToolCallDict(TypedDict, total=False):
+    """Structure of a single tool-call returned by the LLM."""
+
+    id: str
+    name: str
+    args: dict[str, Any]
+
+
 @dataclass(slots=True)
 class Command:
     resume: bool
@@ -76,7 +84,7 @@ class GraphStateSnapshot:
 
 @dataclass(slots=True)
 class _PendingToolResume:
-    tool_calls: list[dict[str, Any]]
+    tool_calls: list[ToolCallDict]
     prompt: str
 
 
@@ -84,14 +92,13 @@ class NativeAgentGraph:
     def __init__(
         self,
         *,
-        llm_with_tools: Any,
+        llm_with_tools: LLMInvokable,
         tools: list[AgentTool],
-        system_prompt_fn: Callable[[dict[str, Any]], str],
+        system_prompt_fn: SystemPromptFactory,
         model_name: str,
         session_id: str | None,
-        state_updater_fn: Callable[[str, Any, dict[str, Any]], dict[str, Any]],
-        knowledge_graph_populator_fn: Callable[[Any, str, str, dict[str, Any]], dict[str, Any]]
-        | None,
+        state_updater_fn: StateUpdater,
+        knowledge_graph_populator_fn: KnowledgeGraphPopulator | None,
         input_guardrail_tool_names: set[str] | frozenset[str],
         output_guardrail_tool_names: set[str] | frozenset[str],
         enable_cost_tracker: bool,
@@ -263,7 +270,7 @@ class NativeAgentGraph:
     async def _arun_tool_calls(
         self,
         state: dict[str, Any],
-        tool_calls: list[dict[str, Any]],
+        tool_calls: list[ToolCallDict],
         *,
         resume_decision: object,
     ) -> tuple[list[dict[str, Any]], bool]:
@@ -396,7 +403,9 @@ class NativeAgentGraph:
         raise KeyError("state not registered")
 
 
-def populate_knowledge_graph(kg, tool_name: str, content: str, state: dict) -> dict:
+def populate_knowledge_graph(
+    kg: Any, tool_name: str, content: str, state: dict[str, Any]
+) -> dict[str, Any]:
     target = state.get("target", "")
     if not target:
         return {}

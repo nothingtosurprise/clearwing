@@ -145,12 +145,15 @@ class FindingsPool:
         self,
         llm: Any = None,
         checkpoint_path: Path | None = None,
+        *,
+        max_dedup_candidates: int = MAX_DEDUP_CANDIDATES,
     ):
         self._lock = asyncio.Lock()
         self._findings: dict[str, Finding] = {}
         self._clusters: dict[str, FindingCluster] = {}
         self._llm = llm
         self._checkpoint_path = checkpoint_path
+        self._max_dedup_candidates = max_dedup_candidates
         if checkpoint_path is not None:
             checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -351,7 +354,7 @@ class FindingsPool:
                 cluster.cwe == cwe or cluster.primitive_type == primitive_type
             ):
                 candidates.append(cluster)
-                if len(candidates) >= MAX_DEDUP_CANDIDATES:
+                if len(candidates) >= self._max_dedup_candidates:
                     break
         return candidates
 

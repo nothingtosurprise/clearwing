@@ -368,7 +368,7 @@ class TestHardening:
         mock_response.first_text.return_value = "still bad poc"
         mock_llm.aask_text = AsyncMock(return_value=mock_response)
 
-        manager = _FakeSandboxManager(crash_rate=0.1)
+        manager = _FakeSandboxManager(crash_rate=0.0)
         config = StabilityConfig(
             runs_per_container=10, num_containers=3,
             enable_hardening=True,

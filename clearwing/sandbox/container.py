@@ -57,6 +57,9 @@ class SandboxConfig:
     cap_add: list[str] = field(default_factory=lambda: ["SYS_PTRACE"])
     read_only_rootfs: bool = False
     runtime: str | None = None
+    labels: dict[str, str] = field(
+        default_factory=lambda: {"managed-by": "clearwing"}
+    )
 
 
 class SandboxContainer:
@@ -77,6 +80,8 @@ class SandboxContainer:
         self.config = config
         self._client = None
         self._container = None
+        self.scratch_host_dir: str | None = None
+        self.variant: list[str] | None = None
 
     # --- Lifecycle ----------------------------------------------------------
 
@@ -124,11 +129,18 @@ class SandboxContainer:
             kwargs["nano_cpus"] = int(self.config.cpus * 1e9)
         if self.config.name:
             kwargs["name"] = self.config.name
+        if self.config.labels:
+            kwargs["labels"] = self.config.labels
         # auto_remove conflicts with detached non-restart containers in some
         # docker versions; we'll handle removal manually in stop()
 
         self._container = client.containers.run(**kwargs)
         logger.debug("Sandbox container started: %s", self._container.short_id)
+
+        from .registry import ContainerRegistry
+
+        ContainerRegistry.get().register(self)
+
         return self._container.id
 
     def exec(
@@ -292,6 +304,11 @@ class SandboxContainer:
         """Stop and remove the container. Idempotent."""
         if self._container is None:
             return
+
+        from .registry import ContainerRegistry
+
+        ContainerRegistry.get().unregister(self)
+
         try:
             self._container.stop(timeout=5)
         except Exception:
@@ -300,6 +317,23 @@ class SandboxContainer:
             self._container.remove(force=True)
         except Exception:
             logger.debug("Sandbox container remove failed", exc_info=True)
+
+        # Verify the container is actually gone; kill if still running
+        try:
+            self._container.reload()
+            # If reload succeeds the container is still around
+            logger.warning(
+                "Container %s still present after remove, killing",
+                self._container.short_id,
+            )
+            try:
+                self._container.kill()
+            except Exception:
+                logger.debug("Container kill after failed remove", exc_info=True)
+        except Exception:
+            # Expected: reload raises when the container no longer exists
+            pass
+
         self._container = None
 
     # --- Context manager ----------------------------------------------------
@@ -325,3 +359,14 @@ class SandboxContainer:
     @property
     def is_running(self) -> bool:
         return self._container is not None
+
+    def __del__(self) -> None:
+        if self._container is not None:
+            logger.warning(
+                "SandboxContainer %s was not stopped before garbage collection",
+                getattr(self._container, "short_id", "unknown"),
+            )
+            try:
+                self.stop()
+            except Exception:
+                logger.debug("SandboxContainer __del__ cleanup failed", exc_info=True)

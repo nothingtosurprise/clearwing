@@ -1,7 +1,7 @@
 # Clearwing developer commands. Mirror the CI gate so `make lint type test`
 # gives you the same pass/fail signal as a PR.
 
-.PHONY: help install-dev lint format fmt type test test-strict build clean gate all docs docs-serve
+.PHONY: help install-dev lint format fmt type test test-strict build clean gate all docs docs-serve security-lint
 
 PY       := venv/bin/python
 PYTEST   := $(PY) -m pytest
@@ -59,6 +59,9 @@ clean:
 gate: lint type test-strict build
 
 all: gate
+
+security-lint:
+	$(RUFF) check --select S clearwing/
 
 docs:
 	$(PY) -m mkdocs build --strict

@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 import networkx as nx
 
@@ -74,15 +78,37 @@ class KnowledgeGraph:
         "RELATED_TO_CVE",
     )
 
-    def __init__(self, persist_path: str | None = None):
+    def __init__(
+        self,
+        persist_path: str | None = None,
+        *,
+        auto_save: bool = False,
+        auto_save_interval: float = 30.0,
+        auto_save_after_n: int = 10,
+    ):
         self._graph = nx.DiGraph()
         self._persist_path = Path(persist_path).expanduser() if persist_path else None
+        self._auto_save = auto_save
+        self._auto_save_interval = auto_save_interval
+        self._auto_save_after_n = auto_save_after_n
+        self._mutation_count = 0
+        self._last_save_time = time.monotonic()
         if self._persist_path and self._persist_path.exists():
             self._load()
 
     # ------------------------------------------------------------------
     # Entity management
     # ------------------------------------------------------------------
+
+    def _maybe_auto_save(self) -> None:
+        if not self._auto_save or not self._persist_path:
+            return
+        self._mutation_count += 1
+        elapsed = time.monotonic() - self._last_save_time
+        if self._mutation_count >= self._auto_save_after_n or elapsed >= self._auto_save_interval:
+            self._do_save()
+            self._mutation_count = 0
+            self._last_save_time = time.monotonic()
 
     def add_entity(self, entity_type: str, entity_id: str, **properties) -> Entity:
         """Add or update an entity node."""
@@ -94,6 +120,7 @@ class KnowledgeGraph:
                 properties=properties,
                 created_at=entity.created_at,
             )
+        self._maybe_auto_save()
         return entity
 
     def get_entity(self, entity_id: str) -> Entity | None:
@@ -138,6 +165,7 @@ class KnowledgeGraph:
         )
         with self._lock:
             self._graph.add_edge(source_id, target_id, rel_type=rel_type, properties=properties)
+        self._maybe_auto_save()
         return rel
 
     def get_relationships(self, entity_id: str, direction: str = "out") -> list[Relationship]:
@@ -360,10 +388,23 @@ class KnowledgeGraph:
         save_path = Path(path).expanduser() if path else self._persist_path
         if not save_path:
             return
+        self._do_save(save_path)
+
+    def _do_save(self, save_path: Path | None = None):
+        save_path = save_path or self._persist_path
+        if not save_path:
+            return
         save_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
             data = nx.node_link_data(self._graph)
-        save_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp_path = save_path.with_suffix(".tmp")
+        try:
+            tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            tmp_path.replace(save_path)
+        except Exception:
+            logger.debug("KnowledgeGraph save failed", exc_info=True)
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
 
     def _load(self):
         """Load graph from persist path."""

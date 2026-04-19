@@ -30,6 +30,7 @@ from clearwing.providers import (
 )
 
 from ..sandbox.hunter_sandbox import HunterSandbox
+from .config import SourceHuntConfig
 from .disclosure import (
     DisclosureGenerator,
 )
@@ -48,7 +49,15 @@ from .poc_runner import build_rerun_poc_callback
 from .pool import BandBudget, HunterPool, HuntPoolConfig, TierBudget
 from .preprocessor import Preprocessor, PreprocessResult
 from .ranker import Ranker, RankerConfig
-from .state import EvidenceLevel, FileTarget, Finding, filter_by_evidence
+from .state import (
+    EvidenceLevel,
+    FileTarget,
+    Finding,
+    PipelineStatus,
+    StageOutcome,
+    evidence_at_or_above,
+    filter_by_evidence,
+)
 from .variant_loop import (
     VariantLoop,
     VariantPatternGenerator,
@@ -79,6 +88,7 @@ class SourceHuntResult:
     subsystems_hunted: int = 0
     subsystem_spent_usd: float = 0.0
     elaborated_findings: list[Finding] = field(default_factory=list)
+    pipeline_status: PipelineStatus = field(default_factory=PipelineStatus)
 
     @property
     def critical_count(self) -> int:
@@ -145,7 +155,7 @@ class SourceHuntRunner:
 
     def __init__(
         self,
-        repo_url: str,
+        repo_url: str = "",
         branch: str = "main",
         local_path: str | None = None,
         depth: str = "standard",  # quick | standard | deep
@@ -206,7 +216,155 @@ class SourceHuntRunner:
         gvisor_runtime: str | None = None,
         preprocessing: bool = True,
         seed_harness_crashes: bool = False,
+        *,
+        config: SourceHuntConfig | None = None,
     ):
+        # --- Resolve from SourceHuntConfig when provided ----------------------
+        if config is not None:
+            t = config.target
+            b = config.budget
+            o = config.output
+            f = config.features
+            h = config.tuning
+            # Target params — keyword args override config if explicitly given
+            repo_url = repo_url or t.repo_url
+            branch = branch if branch != "main" else t.branch
+            local_path = local_path if local_path is not None else t.local_path
+            depth = depth if depth != "standard" else t.depth
+            # Budget params
+            budget_usd = budget_usd if budget_usd != 0.0 else b.budget_usd
+            max_parallel = max_parallel if max_parallel != 8 else b.max_parallel
+            tier_budget = tier_budget if tier_budget is not None else b.tier_budget
+            exploit_budget = (
+                exploit_budget if exploit_budget is not None else b.exploit_budget
+            )
+            elaboration_cap = (
+                elaboration_cap if elaboration_cap != "10%" else b.elaboration_cap
+            )
+            subsystem_budget_usd = (
+                subsystem_budget_usd
+                if subsystem_budget_usd != 0.0
+                else b.subsystem_budget_usd
+            )
+            subsystem_max_parallel = (
+                subsystem_max_parallel
+                if subsystem_max_parallel != 4
+                else b.subsystem_max_parallel
+            )
+            # Output params
+            output_dir = (
+                output_dir
+                if output_dir != "./sourcehunt-results"
+                else o.output_dir
+            )
+            output_formats = output_formats if output_formats is not None else o.output_formats
+            export_disclosures = export_disclosures or o.export_disclosures
+            disclosure_reporter_name = (
+                disclosure_reporter_name
+                if disclosure_reporter_name != "(your name)"
+                else o.disclosure_reporter_name
+            )
+            disclosure_reporter_affiliation = (
+                disclosure_reporter_affiliation
+                if disclosure_reporter_affiliation != "(your affiliation)"
+                else o.disclosure_reporter_affiliation
+            )
+            disclosure_reporter_email = (
+                disclosure_reporter_email
+                if disclosure_reporter_email != "(your email)"
+                else o.disclosure_reporter_email
+            )
+            # Feature flags
+            no_verify = no_verify or f.no_verify
+            no_exploit = no_exploit or f.no_exploit
+            enable_elaboration = enable_elaboration or f.enable_elaboration
+            enable_variant_loop = enable_variant_loop and f.enable_variant_loop
+            enable_stability_verification = (
+                enable_stability_verification and f.enable_stability_verification
+            )
+            enable_mechanism_memory = (
+                enable_mechanism_memory and f.enable_mechanism_memory
+            )
+            enable_behavior_monitor = (
+                enable_behavior_monitor and f.enable_behavior_monitor
+            )
+            enable_patch_oracle = enable_patch_oracle and f.enable_patch_oracle
+            enable_findings_pool = enable_findings_pool and f.enable_findings_pool
+            enable_subsystem_hunt = enable_subsystem_hunt or f.enable_subsystem_hunt
+            enable_auto_patch = enable_auto_patch or f.enable_auto_patch
+            auto_pr = auto_pr or f.auto_pr
+            enable_knowledge_graph = (
+                enable_knowledge_graph and f.enable_knowledge_graph
+            )
+            enable_calibration = enable_calibration and f.enable_calibration
+            enable_artifact_store = enable_artifact_store or f.enable_artifact_store
+            no_per_file_hunt = no_per_file_hunt or f.no_per_file_hunt
+            seed_harness_crashes = seed_harness_crashes or f.seed_harness_crashes
+            preprocessing = preprocessing and f.preprocessing
+            adversarial_verifier = adversarial_verifier and f.adversarial_verifier
+            adversarial_threshold = (
+                adversarial_threshold
+                if adversarial_threshold != "static_corroboration"
+                else f.adversarial_threshold
+            )
+            validator_mode = (
+                validator_mode if validator_mode != "v2" else f.validator_mode
+            )
+            exploit_mode = exploit_mode or f.exploit_mode
+            agent_mode = agent_mode if agent_mode != "auto" else f.agent_mode
+            prompt_mode = (
+                prompt_mode
+                if prompt_mode != "unconstrained"
+                else f.prompt_mode
+            )
+            # Hunt tuning
+            starting_band = (
+                starting_band if starting_band is not None else h.starting_band
+            )
+            redundancy_override = (
+                redundancy_override
+                if redundancy_override is not None
+                else h.redundancy_override
+            )
+            shard_entry_points = (
+                shard_entry_points
+                if shard_entry_points is not None
+                else h.shard_entry_points
+            )
+            min_shard_rank = (
+                min_shard_rank if min_shard_rank != 4 else h.min_shard_rank
+            )
+            min_project_loc = (
+                min_project_loc
+                if min_project_loc != 50_000
+                else h.min_project_loc
+            )
+            seed_corpus_sources = (
+                seed_corpus_sources
+                if seed_corpus_sources is not None
+                else h.seed_corpus_sources
+            )
+            subsystem_paths = (
+                subsystem_paths
+                if subsystem_paths is not None
+                else h.subsystem_paths
+            )
+            campaign_hint = (
+                campaign_hint if campaign_hint is not None else h.campaign_hint
+            )
+            gvisor_runtime = (
+                gvisor_runtime if gvisor_runtime is not None else h.gvisor_runtime
+            )
+
+        if not repo_url:
+            raise ValueError(
+                "repo_url is required — pass it directly or via "
+                "config=SourceHuntConfig(target=TargetConfig(repo_url=...))"
+            )
+
+        # Store the config for introspection (None if constructed the old way)
+        self._config = config
+
         self.repo_url = repo_url
         self.branch = branch
         self.local_path = local_path
@@ -331,6 +489,7 @@ class SourceHuntRunner:
     async def arun(self) -> SourceHuntResult:
         start_time = time.monotonic()
         self._ensure_output_dir_layout()
+        pipeline_status = PipelineStatus()
         logger.info("Sourcehunt session %s starting on %s", self._session_id, self.repo_url)
         try:
             # 1. Preprocess
@@ -360,10 +519,19 @@ class SourceHuntRunner:
                         )
                     await Ranker(ranker_llm, ranker_config).arank(files)
                     logger.info("Ranker completed")
+                    pipeline_status.record_succeeded("ranker")
                 except Exception:
                     logger.warning("Ranker failed", exc_info=True)
+                    pipeline_status.record_degraded(
+                        "ranker",
+                        "All files assigned default priority scores (surface=3, influence=2)",
+                    )
             else:
                 logger.info("Ranker skipped; no LLM available")
+                pipeline_status.record_degraded(
+                    "ranker",
+                    "All files assigned default priority scores (surface=3, influence=2)",
+                )
                 # Fallback: assign reasonable defaults so tier assignment still works
                 for ft in files:
                     ft["surface"] = ft.get("surface") or 3
@@ -380,6 +548,7 @@ class SourceHuntRunner:
                     repo_path=repo_path,
                     preprocess_result=preprocess_result,
                     files_ranked=files_ranked,
+                    pipeline_status=pipeline_status,
                 )
 
             # 2.5. Harness Generator (crash-first ordering) — at depth=deep or
@@ -404,6 +573,10 @@ class SourceHuntRunner:
                         )
                     except Exception:
                         logger.warning("Harness generator failed", exc_info=True)
+                        pipeline_status.record_degraded(
+                            "harness_generator",
+                            "No seeded crashes available; hunting without crash context",
+                        )
 
             # Build a lookup so hunters for fuzzed files can pull their seeded
             # crash context via file path
@@ -446,6 +619,10 @@ class SourceHuntRunner:
                         )
                     except Exception:
                         logger.warning("Entry-point extraction failed", exc_info=True)
+                        pipeline_status.record_degraded(
+                            "entry_points",
+                            "Entry-point sharding unavailable; hunting at file level",
+                        )
 
             # 2.8. Seed corpus ingestion (spec 004)
             seed_corpus_by_file: dict = {}
@@ -463,6 +640,10 @@ class SourceHuntRunner:
                             logger.warning("Seed corpus: %s", err)
                 except Exception:
                     logger.warning("Seed corpus ingestion failed", exc_info=True)
+                    pipeline_status.record_degraded(
+                        "seed_corpus",
+                        "Seed corpus unavailable; hunting without CVE/crash history",
+                    )
 
             # 2.9. Shared findings pool (spec 005)
             findings_pool = None
@@ -529,8 +710,13 @@ class SourceHuntRunner:
                 try:
                     all_findings = await pool.arun()
                     logger.info("HunterPool completed with %d findings", len(all_findings))
+                    pipeline_status.record_succeeded("hunter_pool")
                 except Exception:
                     logger.warning("HunterPool run failed", exc_info=True)
+                    pipeline_status.record_degraded(
+                        "hunter_pool",
+                        "Hunter phase produced no findings due to error",
+                    )
                 spent_per_tier = pool.spent_per_tier
                 band_stats = {
                     "fast_runs": pool.runs_per_band.get("fast", 0),
@@ -650,6 +836,10 @@ class SourceHuntRunner:
                         )
                     except Exception:
                         logger.warning("Subsystem hunt failed", exc_info=True)
+                        pipeline_status.record_degraded(
+                            "subsystem_hunt",
+                            "Subsystem hunt failed; only per-file findings available",
+                        )
 
             # 4. Verify (unless --no-verify)
             verified: list[Finding] = []
@@ -669,8 +859,16 @@ class SourceHuntRunner:
                     for f in all_findings:
                         f["verified"] = True
                     verified = all_findings
+                    pipeline_status.record_degraded(
+                        "verifier",
+                        "Findings auto-verified without independent review",
+                    )
             else:
                 verified = all_findings
+                pipeline_status.record(
+                    "verifier", StageOutcome.SKIPPED,
+                    fallback_description="Verification skipped (--no-verify)",
+                )
 
             if rejected:
                 self._write_rejected_findings(rejected)
@@ -688,6 +886,10 @@ class SourceHuntRunner:
                                 self._mechanism_store.append(mech)
                     except Exception:
                         logger.warning("Mechanism extraction failed", exc_info=True)
+                        pipeline_status.record_degraded(
+                            "mechanism_extraction",
+                            "Mechanism extraction failed; cross-run memory not updated",
+                        )
 
             # 4.75. v0.3: Variant Hunter Loop — compound finding density within
             #       this run. For each verified finding, generate a grep pattern,
@@ -744,6 +946,10 @@ class SourceHuntRunner:
                         )
                     except Exception:
                         logger.warning("Variant loop failed", exc_info=True)
+                        pipeline_status.record_degraded(
+                            "variant_loop",
+                            "Variant loop failed; no sibling bugs surfaced",
+                        )
 
             # 4.9. Stage 2.5: PoC stability verification (spec 010).
             # Rerun PoCs in fresh containers to measure reliability.
@@ -1006,6 +1212,7 @@ class SourceHuntRunner:
                 band_stats=band_stats,
                 pool_stats=_pool_stats,
                 subsystem_stats=_subsystem_stats,
+                pipeline_status=pipeline_status,
             )
 
             duration = time.monotonic() - start_time
@@ -1026,6 +1233,7 @@ class SourceHuntRunner:
                 session_id=self._session_id,
                 subsystems_hunted=subsystems_hunted,
                 subsystem_spent_usd=subsystem_spent,
+                pipeline_status=pipeline_status,
             )
         finally:
             if self._sandbox_manager is not None:
@@ -1081,7 +1289,7 @@ class SourceHuntRunner:
             try:
                 from clearwing.data.knowledge import KnowledgeGraph
 
-                kg = KnowledgeGraph(persist_path="~/.clearwing/knowledge_graph.json")
+                kg = KnowledgeGraph(persist_path="~/.clearwing/knowledge_graph.json", auto_save=True)
             except Exception:
                 logger.debug("Could not import KnowledgeGraph", exc_info=True)
                 return
@@ -1444,6 +1652,7 @@ class SourceHuntRunner:
         repo_path: str,
         preprocess_result: PreprocessResult,
         files_ranked: int,
+        pipeline_status: PipelineStatus | None = None,
     ) -> SourceHuntResult:
         """depth=quick exit — only static findings, no LLM hunters."""
         all_findings = self._merge_static_findings([], preprocess_result)
@@ -1474,6 +1683,7 @@ class SourceHuntRunner:
             tokens_used=0,
             output_paths=output_paths,
             session_id=self._session_id,
+            pipeline_status=pipeline_status or PipelineStatus(),
         )
 
     def _merge_static_findings(
@@ -1635,6 +1845,7 @@ class SourceHuntRunner:
         band_stats: dict | None = None,
         pool_stats: dict | None = None,
         subsystem_stats: dict | None = None,
+        pipeline_status: PipelineStatus | None = None,
     ) -> dict[str, str]:
         """Write SARIF / markdown / JSON outputs to the output directory.
 
@@ -1659,6 +1870,7 @@ class SourceHuntRunner:
                 band_stats=band_stats,
                 pool_stats=pool_stats,
                 subsystem_stats=subsystem_stats,
+                pipeline_status=pipeline_status,
             )
         except Exception:
             logger.warning("Reporter failed", exc_info=True)
