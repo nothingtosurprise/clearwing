@@ -40,13 +40,14 @@ clearwing sourcehunt <repo_url_or_path>
   [--auto-patch]              # opt-in validated patch generation
   [--auto-pr]                 # open draft PRs for validated patches
   [--export-disclosures]      # write MITRE + HackerOne templates
-  [--disclosure-reporter-name NAME]
-  [--disclosure-reporter-affiliation AFFILIATION]
-  [--disclosure-reporter-email EMAIL]
+  [--reporter-name NAME]
+  [--reporter-affiliation AFFILIATION]
+  [--reporter-email EMAIL]
   [--model MODEL_NAME]        # override per-task model selection
   [--base-url URL]            # OpenAI-compat endpoint (OpenRouter, Ollama, ...)
   [--api-key KEY]             # credential for --base-url
-  [-o OUTPUT_DIR]             # default: ./sourcehunt-results
+  [--output-dir DIR]          # default: ./sourcehunt-results
+  [--format sarif markdown json all]  # default: all
 ```
 
 See [LLM providers](providers.md) for the full precedence rules and
@@ -61,6 +62,157 @@ Depths:
 - **`deep`** — adds the crash-first harness generator (libFuzzer,
   30s per file) and enables auto-patch mode. Most expensive in both
   wall time and tokens.
+
+### Agent & prompt control (specs 001–002)
+
+```bash
+  [--agent-mode auto|constrained|deep]  # default: auto (derives from --depth)
+  [--prompt-mode unconstrained|specialist]  # default: unconstrained
+  [--campaign-hint OBJECTIVE]   # e.g. "bugs reachable from unauthenticated remote input"
+  [--exploit]                   # instruct hunters to write exploits inline
+```
+
+- **`--agent-mode`**: `auto` derives from depth (standard/deep → full-shell
+  agent with execute/read_file/write_file/think tools; quick → constrained
+  9-tool hunter). `deep` forces full-shell regardless of depth.
+- **`--prompt-mode`**: `unconstrained` uses a simple discovery prompt
+  (Glasswing-style); `specialist` uses prescriptive checklists per CWE
+  category.
+
+### Band promotion & budget (spec 003)
+
+```bash
+  [--starting-band fast|standard|deep]  # override auto band selection
+  [--redundancy N]              # override redundancy count for high-ranked files
+  [--skip-tier-c]               # disable Tier C propagation audits
+```
+
+Three-band promotion system: fast ($2–5), standard ($10–25), deep
+($40–100). Auto-promotes when signals (findings, evidence levels) are
+detected. Redundancy defaults by rank: rank 5 → 3 runs, rank 4 → 2
+runs, else 1.
+
+### Entry-point sharding & seed context (spec 004)
+
+```bash
+  [--shard-entry-points]        # shard by function-level entry point
+  [--min-shard-rank N]          # minimum file rank for sharding (default: 4)
+  [--seed-corpus PATH]          # local seed corpus directory
+  [--seed-cves]                 # extract CVE history from git log as seed context
+```
+
+For high-ranked files in large projects, shards agents by function-level
+entry point (syscall handler, protocol parser, fuzz target, etc.) instead
+of whole-file analysis.
+
+### Shared findings pool (spec 005)
+
+```bash
+  [--no-findings-pool]          # disable cross-agent findings pool
+```
+
+Enabled by default. Cross-agent database with root-cause deduplication
+and mid-run primitive queries. Agents can query known primitives
+(arbitrary_read, use_after_free, etc.) to chain findings.
+
+### Cross-subsystem hunting (spec 006)
+
+```bash
+  [--subsystem-hunt]            # enable cross-subsystem hunting after per-file hunts
+  [--subsystem PATH]            # manually specify subsystem directory (repeatable)
+  [--no-per-file-hunt]          # skip per-file hunting; only run subsystem hunts
+```
+
+Auto-identifies subsystems from ranked files or accepts manual
+specification. Runs after per-file hunts with the full findings pool
+for cross-file interaction discovery.
+
+### Exploit development (spec 007)
+
+```bash
+  [--exploit-budget standard|deep|campaign]  # default: auto from --depth
+```
+
+Budget bands: standard=$25/1hr, deep=$200/4hr, campaign=$2000/12hr.
+Multi-turn agentic exploiter with environment shaping (recompile with
+debug, inject printf, etc.) and mitigation-applicability reasoning.
+
+### Exploit elaboration (spec 008)
+
+```bash
+  [--elaborate FINDING_ID]      # interactive HITL session to upgrade a finding
+  [--elaborate-auto]            # autonomous elaboration agent (no human guidance)
+  [--elaborate-top N]           # elaborate top N findings by severity/primitive
+  [--elaborate-cap PERCENT]     # cap at N% of verified findings (default: 10%)
+  [--elaborate-session SESSION_ID]  # session to load findings from
+  [--elaborate-pipeline]        # enable Stage 1.5 elaboration in the pipeline
+```
+
+Human-in-the-loop or autonomous agent for upgrading partial exploits
+to higher-impact primitives. Rate-limited to top 10% of findings by
+default.
+
+### Validation (spec 009)
+
+```bash
+  [--validator-mode v1|v2]      # v1=legacy verifier, v2=4-axis validator (default)
+  [--adversarial-threshold LEVEL]  # min evidence to spend verifier budget
+  [--no-adversarial]            # use simpler v0.1 prompt
+  [--calibrate SESSION_ID]      # interactively assign human severity ratings
+```
+
+The v2 validator evaluates four independent axes: REAL, TRIGGERABLE,
+IMPACTFUL, GENERAL. Gets only the finding report + PoC (not the
+discovery transcript) for independence. Calibration tracking targets
+89% agreement with human reviewers.
+
+### PoC stability (spec 010)
+
+```bash
+  [--no-stability-check]        # skip PoC stability verification
+```
+
+Enabled by default. Runs validated PoCs through 3 fresh containers
+(20 runs each, ASLR variation). Classifies as stable (≥90%),
+flaky (50–90%), or unreliable (<50%). One hardening attempt for
+unreliable PoCs before archival. Race conditions (CWE-362 etc.)
+use a lowered 70% threshold with 100 runs.
+
+### Self-security (spec 013)
+
+```bash
+  [--gvisor]                    # use gVisor runtime for container isolation
+  [--encrypt-artifacts]         # enable encrypted artifact storage
+  [--no-behavior-monitor]       # disable behavioral monitoring
+```
+
+### Watch & webhook modes
+
+```bash
+  [--watch]                     # poll git for new commits and re-scan blast radius
+  [--poll-interval N]           # watch poll interval in seconds (default: 300)
+  [--max-watch-iterations N]    # max iterations, 0 = infinite
+  [--github-checks]             # post findings as GitHub check runs
+  [--webhook]                   # HTTP server for GitHub push events
+  [--webhook-port PORT]         # default: 8787
+  [--webhook-secret SECRET]     # HMAC-SHA256 secret (or GITHUB_WEBHOOK_SECRET env)
+```
+
+### Retro-hunt mode
+
+```bash
+  [--retro-hunt CVE_ID]         # generate Semgrep rule from a fix and find variants
+  [--patch-source PATH_OR_SHA]  # patch diff file or git SHA (required with --retro-hunt)
+  [--patch-repo REPO]           # repo to resolve patch SHAs from
+```
+
+### Pipeline toggles
+
+```bash
+  [--no-variant-loop]           # skip variant hunter loop
+  [--no-mechanism-memory]       # skip cross-run mechanism memory
+  [--no-patch-oracle]           # skip patch-oracle truth test
+```
 
 ### `sourcehunt --nday` — N-day exploit pipeline
 

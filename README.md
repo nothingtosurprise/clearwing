@@ -19,13 +19,18 @@ Clearwing is a dual-mode offensive-security tool:
   human-approval guardrail), and writes reports to a persistent
   knowledge graph.
 - **Source-code hunter** — a file-parallel agent-driven
-  pipeline that ranks source files, fans out per-file hunter agents,
-  uses ASan/UBSan crashes as ground truth, verifies findings with an
-  adversarial second-pass agent, optionally generates validated
-  patches, and emits SARIF/markdown/JSON reports with explicit
-  evidence levels
+  pipeline that ranks source files, fans out per-file hunter agents
+  (full-shell or constrained), uses ASan/UBSan crashes as ground
+  truth, verifies findings with a 4-axis validator (REAL /
+  TRIGGERABLE / IMPACTFUL / GENERAL), runs PoC stability checks
+  across fresh containers, optionally generates validated patches,
+  and emits SARIF/markdown/JSON reports with explicit evidence levels
   (`suspicion → static_corroboration → crash_reproduced →
   root_cause_explained → exploit_demonstrated → patch_validated`).
+  Features three-band budget promotion, entry-point sharding for
+  large files, cross-subsystem hunting, a shared findings pool with
+  root-cause deduplication, multi-turn agentic exploit development,
+  and human-in-the-loop exploit elaboration.
 - **N-day exploit pipeline** — given CVE IDs, builds the
   vulnerable version, develops working exploits, and validates
   against the patched version to confirm the fix.
