@@ -219,33 +219,31 @@ def _run_interactive_legacy(cli, args, session=None):
                 events = asyncio.run(_collect_events(graph, input_msg))
                 interrupted = False
 
-                shown_ids: set[int] = set()
+                last_msg_count = 0
                 for event in events:
                     msgs = event.get("messages", [])
-                    if msgs:
-                        last = msgs[-1]
-                        msg_id = id(last)
-                        if msg_id in shown_ids:
-                            continue
-                        if hasattr(last, "content") and last.content and last.type == "ai":
-                            content = last.content
-                            if isinstance(content, list):
-                                text_parts = [
-                                    c["text"]
-                                    for c in content
-                                    if isinstance(c, dict) and c.get("type") == "text"
-                                ]
-                                content = "\n".join(text_parts)
-                            content = strip_think_tags(content)
-                            if content:
-                                shown_ids.add(msg_id)
-                                cli.console.print(
-                                    Panel(
-                                        content,
-                                        title="[bold cyan]Agent[/bold cyan]",
-                                        border_style="cyan",
-                                    )
+                    if len(msgs) <= last_msg_count:
+                        continue
+                    last_msg_count = len(msgs)
+                    last = msgs[-1]
+                    if hasattr(last, "content") and last.content and last.type == "ai":
+                        content = last.content
+                        if isinstance(content, list):
+                            text_parts = [
+                                c["text"]
+                                for c in content
+                                if isinstance(c, dict) and c.get("type") == "text"
+                            ]
+                            content = "\n".join(text_parts)
+                        content = strip_think_tags(content)
+                        if content:
+                            cli.console.print(
+                                Panel(
+                                    content,
+                                    title="[bold cyan]Agent[/bold cyan]",
+                                    border_style="cyan",
                                 )
+                            )
 
                 # Check for interrupt
                 state = graph.get_state(config)
