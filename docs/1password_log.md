@@ -575,9 +575,11 @@ tools.
 | **CVE-2023-46133** | 9.1 | CryptoES: same weak default as crypto-js | **NO** — same reason |
 | **CVE-2025-11187** | — | OpenSSL PBMAC1: stack buffer overflow in PKCS#12 MAC verification | **NO** — different context (PKCS#12) |
 
-**Key observation:** 1Password uses 100,000 iterations of PBKDF2-HMAC-SHA256.
-OWASP's 2025 recommendation is 310,000–600,000. However, the 128-bit Secret Key
-makes brute force infeasible regardless of iteration count.
+**Key observation:** 1Password's default PBKDF2-HMAC-SHA256 iterations is
+**650,000** (discovered in Step 3.9 — `DEFAULT_ITERATIONS=65e4`), which exceeds
+OWASP's 2025 recommendation of 600,000. A secondary constant of 100,000 exists
+for token-based derivation. The 128-bit Secret Key makes brute force infeasible
+regardless.
 
 ### AES-GCM / Nonce CVEs
 
@@ -639,13 +641,14 @@ The browser's native crypto layer is the correct choice over JS polyfills.
 
 ### Actionable Items for Phase 2-3
 
-1. **Verify WebCrypto vs polyfill** — check if the web client's JS bundle
-   imports the npm `pbkdf2` package or uses `crypto.subtle.deriveBits()`. If
-   polyfill is used, CVE-2025-6545 could produce zero-derived keys.
+1. ~~**Verify WebCrypto vs polyfill**~~ — **RESOLVED (Step 3.9)**: Native
+   `crypto.subtle.deriveBits()` confirmed. CVE-2025-6545 does NOT apply.
 2. **Test SRP timing** — PARASITE-class timing attack against the production
-   server, even though the Go library is likely safe (Step 3.2)
+   server, even though the Go library is likely safe (Step 3.2). **Requires
+   valid account credentials to get SRP parameters.**
 3. **Check AES-GCM nonce generation** — verify per-item unique nonces when
-   we reach vault encryption analysis (Step 3.7)
+   we reach vault encryption analysis (Step 3.7). **Requires authenticated
+   session.**
 4. **Investigate CVE-2022-32550 residual** — the SRP connection validation
    deviation was patched, but understand exactly what deviated to look for
    similar issues in the current implementation
@@ -802,3 +805,303 @@ SRP parameters that we can only get with valid account identifiers. Options:
    weaknesses (Step 3.9) don't require authentication
 4. **Brute force account identifiers** — infeasible given the `(email, skid,
    userUuid)` tuple requirement with identical 400 responses
+
+
+## Phase 3: Client-Side Attack Analysis
+
+### Step 3.9 — Client-Side Attack Surface
+
+**Date:** 2026-04-23
+
+### PBKDF2: Native WebCrypto Confirmed (CVE-2025-6545 Does NOT Apply)
+
+The web client uses **native `crypto.subtle`** for all PBKDF2 operations:
+
+```javascript
+// From webapi bundle — actual key derivation
+const c = await o.subtle.importKey("raw", i, {name: "PBKDF2"}, false, ["deriveBits"]);
+const d = await o.subtle.deriveBits({name: "PBKDF2", salt: r, iterations: s, hash: {name: e}}, c, 8*n);
+```
+
+- All PBKDF2 calls go through `crypto.subtle.importKey` + `crypto.subtle.deriveBits`
+- The npm `pbkdf2` polyfill (CVE-2025-6545 / CVE-2025-6547, zero-buffer on
+  non-normalized algorithm names) is **NOT used**
+- HKDF uses `crypto.subtle` as well
+- **CVE-2025-6545 is definitively ruled out**
+
+**Iteration counts discovered:**
+- `DEFAULT_ITERATIONS = S = 65e4` = **650,000** (higher than OWASP 2025 recommendation of 600k!)
+- `ITERATIONS_100_000 = 1e5` = 100,000 (used for token-based PBKDF2)
+- The Bitwarden import path also uses `crypto.subtle.deriveBits`
+
+### Lodash 4.17.21 — Unfixed CVEs, But NOT Exploitable
+
+**Two unfixed CVEs exist in lodash 4.17.21:**
+
+| CVE | CVSS | Description | Fixed in |
+|-----|------|-------------|----------|
+| CVE-2025-13465 | 6.9 MEDIUM | Prototype pollution via `_.unset`/`_.omit` — can delete Object.prototype properties | 4.17.23 |
+| CVE-2026-2950 | 6.5 MEDIUM | Bypass of CVE-2025-13465 fix via array-wrapped paths | 4.18.0 |
+
+These enable **destructive prototype pollution** — deleting properties from
+built-in prototypes via user-controlled paths to `_.unset()` or `_.omit()`.
+
+**However:** Grep of all 4 application bundles (app, webapi, vendor-1password,
+vendor-lodash) found **zero calls to `_.unset` or `_.omit`**. The vulnerable
+functions are shipped in the lodash bundle but never invoked by the application.
+
+**Assessment:** Not exploitable in the current application. The lodash bundle
+is the standard full build (170KB) but the app only uses safe lodash functions
+(`.merge`, `.set`, `.get`, `.pick`, etc.).
+
+### WASM Hash Whitelist — Main Thread Only
+
+The WASM security model (documented in Step 1.3) has a significant
+architectural limitation:
+
+**The hash whitelist monkey-patch only protects the main thread.**
+
+Each of the 5 WASM modules in `vendor-1password` is loaded through patched
+`WebAssembly.instantiateStreaming` / `WebAssembly.instantiate` calls. These
+patched functions check the SHA-256 hash against the 6-hash whitelist before
+allowing compilation.
+
+**But Web Workers and Service Workers get a fresh `WorkerGlobalScope` with
+the native, unpatched `WebAssembly` API.** The hash check does not exist in
+Worker contexts.
+
+**Worker infrastructure discovered:**
+- Worker scripts served from document origin: `https://bugbounty-ctf.1password.com/workers/` (HTTP 200)
+- Workers loaded via: `new Worker(new URL(\`https://${host}/${workersDir}${name}\`).href)`
+- `worker-src 'self'` in CSP restricts Workers to same origin only
+- Firebase messaging service worker at `/firebase-messaging-sw.js` (HTTP 200)
+  - Imports Firebase SDK from `app.1password.com/libjs/`
+  - Handles push notification events
+
+**Attack chain (theoretical):**
+1. Find a way to inject or replace a same-origin Worker script
+2. Inside the Worker, call native `WebAssembly.instantiate()` with arbitrary
+   WASM bytecode — no hash check runs
+3. The malicious WASM module has full access to the Worker's memory and
+   can communicate back via `postMessage`
+
+**Mitigations that block this chain:**
+- `worker-src 'self'` — no blob: or data: URLs for Workers
+- SRI on all script tags (but Workers bypass SRI since they're not `<script>` tags)
+- Worker scripts are static, served from the CDN proxy
+- No file upload endpoint discovered that could create a Worker script
+
+**Verdict:** Theoretical bypass exists but requires a prerequisite vulnerability
+(same-origin script injection or service worker hijacking) that has not been found.
+
+### postMessage Handlers — Origin Validation Analysis
+
+**5+ `message` event listeners identified across bundles.**
+
+#### Validated handlers (safe):
+- **StripeFrame**: `origin === u` where `u` is the Stripe payment URL ✅
+- **DuoFrame**: `t.origin === i` where `i = "https://duo.1passwordservices.com"` ✅
+
+#### Weakly validated handlers:
+
+**Idle timer reset handler:**
+```javascript
+// Accepts messages from any *.1password.com subdomain
+const n = e.origin.endsWith("." + M.S9.config.server);
+const t = !!e.source?.opener && e.source.opener === window;
+const o = "reset_idle_timer" === e.data.type;
+n && t && o && this.resetIdleTimer();
+```
+Three conditions required: origin endsWith `.1password.com`, source is a
+window opened by this window, and message type is `reset_idle_timer`. The
+opener check (`e.source.opener === window`) prevents arbitrary cross-origin
+abuse — only a popup opened by this specific window can send the message.
+
+**L handler (extension communication):**
+```javascript
+D = (e, t) => {
+    const n = new URL(t);
+    const o = e.config.server;
+    return "" !== o && n.host.slice(n.host.indexOf(".") + 1) === o;
+};
+```
+Origin validation extracts everything after the first dot in the host. For
+`evil.1password.com`, this yields `1password.com` which matches `config.server`.
+**Any `*.1password.com` subdomain passes this check.**
+
+If a subdomain takeover exists on any `*.1password.com` domain (e.g., a
+dangling CNAME to an unclaimed cloud resource), an attacker could:
+1. Take over the subdomain
+2. Open the 1Password web client in an iframe (allowed by `frame-ancestors`)
+3. Send postMessage with a controlled payload
+4. The `L` handler accepts it because the origin passes `D()` validation
+
+The `L` handler dispatches to various flows (DelegatedSession, SingleSignOn,
+etc.) — if any of these flows can be triggered externally, this could be
+significant.
+
+#### Wildcard postMessage (info leak):
+```javascript
+window.opener && window.opener.postMessage({READY: true}, "*");
+```
+When the signin page loads, it sends `{READY: true}` to its opener window
+with `"*"` as the target origin. **Any page that opens the signin page via
+`window.open()` receives this message.** This is a minor info leak: an
+attacker can detect when the signin page has finished loading. Not directly
+exploitable for data exfiltration, but could be used as a timing oracle in
+a more complex attack chain.
+
+### Service Worker Analysis
+
+**Firebase messaging service worker** (`/firebase-messaging-sw.js`):
+- Registered via `navigator.serviceWorker.register("firebase-messaging-sw.js")`
+- Imports Firebase SDK via `importScripts` from `app.1password.com`
+- Handles push notifications with custom `NotificationEvent` class
+- Has full `WebAssembly` API in its scope (unpatched)
+- Service Worker scope: root (`/`) — intercepts all fetch events
+
+**No other service workers found.** The app does not register a custom
+service worker for offline caching or request interception.
+
+### Summary Assessment
+
+| Finding | Severity | Exploitable? |
+|---------|----------|-------------|
+| PBKDF2 uses native WebCrypto (CVE-2025-6545 N/A) | — | No |
+| Lodash 4.17.21 has unfixed CVEs (CVE-2025-13465, CVE-2026-2950) | Medium | **No** — `_.unset`/`_.omit` not called |
+| WASM hash check is main-thread only | Medium | **Theoretical** — requires same-origin script injection |
+| postMessage `D()` accepts any `*.1password.com` subdomain | Low | **Conditional** — requires subdomain takeover |
+| `window.opener.postMessage({READY:true}, "*")` | Info | Minor timing oracle |
+| Firebase service worker has unpatched WASM API | Low | **Theoretical** — requires SW hijacking |
+| PBKDF2 default iterations = 650,000 | — | Exceeds OWASP 2025 recommendation |
+
+**The client-side attack surface is well-defended.** The combination of SRI,
+strict CSP, WASM hash whitelist, and proper origin validation on critical
+postMessage handlers leaves no directly exploitable path without first
+obtaining a prerequisite vulnerability (subdomain takeover or same-origin
+script injection).
+
+### Step 3.10 — Pre-Auth Endpoint Probing
+
+**Date:** 2026-04-23
+
+#### Recovery Flow Architecture (from JS Bundle)
+
+The recovery flow uses its own SRP handshake, separate from the main auth flow.
+All three initial steps are `encrypted: false`:
+
+```
+1. POST /api/v2/recovery-keys/session/new
+   Body: {recoveryKeyUuid: string}
+   Response: {sessionUuid: string, cryptoVersion: string}
+
+2. POST /api/v2/recovery-keys/session/auth/cv1/start
+   Body: {bigA: string}  (SRP client ephemeral A)
+   Response: {bigB: string}  (SRP server ephemeral B)
+
+3. POST /api/v2/recovery-keys/session/auth/cv1/confirm
+   Body: {clientHash: string}  (SRP M1)
+   Response: {serverHash: string}  (SRP M2)
+```
+
+Steps 4+ (email verification, material retrieval, completion) are `encrypted: true`
+— they require the session key from the SRP handshake.
+
+**Recovery key structure:**
+```
+{uuid, label, enc, encryptedBy, cryptoVersion, verifierParam}
+```
+
+The `verifierParam` field is the SRP verifier for this recovery key. Each
+recovery key acts as a separate SRP credential, independent of the account
+password + Secret Key.
+
+**Testing:** Both `00000000-0000-0000-0000-000000000000` and random UUIDs
+return identical `400 {}`. No timing difference (both ~125-155ms, within
+network jitter). Recovery key UUID enumeration is not feasible.
+
+#### Pre-Auth Endpoint Scan Results
+
+| Endpoint | Method | Status | Response | Notes |
+|----------|--------|--------|----------|-------|
+| `/api/v2/preauth-perftrace` | PUT | **200** | `{"success":1}` | Accepts ANY body including empty — write-only telemetry sink |
+| `/api/v2/preauth-perftrace` | POST | 405 | — | Method not allowed |
+| `/api/v2/preauth-perftrace` | GET | 405 | — | Method not allowed |
+| `/api/v2/perftrace` | POST | 405 | — | |
+| `/api/v1/monitoring/status` | GET | 401 | `{}` | |
+| `/api/v2/signinattempts` | GET | 405 | — | |
+| `/api/v1/signinattempts` | POST | 405 | — | |
+| `/api/v1/confidential-computing/session` | POST | 422 | `{"reason":"Failed to parse..."}` | Descriptive error with column number |
+| `/api/v2/session-restore/save-key` | POST | 401 | `{}` | |
+| `/api/v2/session-restore/destroy-key` | POST | 405 | — | |
+| `/api/v1/signup` | POST | 400 | `{}` | Signup disabled |
+| `/api/v2/signup` | POST | 400 | `{}` | Signup disabled |
+| `https://flow.1passwordservices.com/` | GET | 403 | `{"message":"Missing Authentication Token"}` | AWS API Gateway |
+
+#### Confidential Computing Endpoint
+
+`POST /api/v1/confidential-computing/session` returns a **descriptive
+Rust serde error** with specific column numbers:
+
+```
+{"reason":"Failed to parse the request body as JSON at line 1 column 22"}
+```
+
+This is an `encrypted: false` endpoint (from JS analysis). The error format
+confirms a **Rust backend** (serde_json error format). The column numbers
+shift based on the specific fields sent — the parser successfully reads
+the JSON but rejects the structure because required fields are missing or
+types are wrong.
+
+This is the only endpoint that returns a descriptive reason in the error
+body (besides the `skFormat` validation error discovered in Step 2.1).
+
+#### Secret Key Retrieval Fallback Script
+
+The `sk-2c17b526b1a01ed2f995.min.js` script (54KB) is loaded only when the
+main app fails to render (`displayFallback()`). It contains:
+- Custom big number library (not WASM-based)
+- Standalone SRP implementation (no WebCrypto dependency)
+- Used to retrieve the Secret Key in degraded browser environments
+
+This fallback crypto code does NOT go through the WASM hash whitelist or
+the main app's crypto pipeline. If an attacker could force the fallback
+condition (e.g., by causing the main app scripts to fail), the fallback
+SRP code would run without WASM protections. However, the SRP security
+properties should be equivalent — the fallback just uses a different
+implementation (JS BigInt vs. WASM).
+
+#### Assessment
+
+No exploitable pre-auth endpoints found. Key observations:
+
+1. **`preauth-perftrace`** is a write-only sink — cannot read back data
+2. **Recovery flow requires a valid `recoveryKeyUuid`** — UUID space is
+   too large to enumerate, responses are identical for all invalid UUIDs
+3. **Confidential computing** leaks implementation detail (Rust backend)
+   but requires specific structured input we don't have the schema for
+4. **Signup is disabled** on the CTF instance — cannot create accounts
+5. **All authenticated endpoints return uniform `401 {}`** — no info leaks
+
+### Overall Phase 3 Pre-Auth Assessment
+
+**All pre-auth attack vectors have been exhausted without finding an
+exploitable vulnerability.**
+
+| Vector | Status | Verdict |
+|--------|--------|---------|
+| Client-side JS exploitation | Tested | No XSS vector within CSP constraints |
+| WASM module substitution | Tested | Hash whitelist blocks on main thread; Worker bypass theoretical only |
+| Lodash prototype pollution | Tested | Vulnerable functions (`_.unset`/`_.omit`) never called |
+| postMessage origin bypass | Tested | Requires subdomain takeover (not found) |
+| PBKDF2 polyfill weakness | Tested | Native WebCrypto used; CVE-2025-6545 N/A |
+| Recovery flow enumeration | Tested | Uniform 400 responses, no timing leak |
+| Pre-auth endpoint info leak | Tested | Only `preauth-perftrace` (write-only) returns 200 |
+| Signup / account creation | Tested | Disabled on CTF instance |
+| User enumeration | Tested | Uniform responses across all tested emails |
+
+**To proceed further, the engagement needs either:**
+1. Valid account credentials (email + Secret Key + password)
+2. A previously undiscovered pre-auth vulnerability
+3. A subdomain takeover on `*.1password.com` (would enable postMessage attack)
+4. Access to the server-side infrastructure (out of scope for this CTF)
